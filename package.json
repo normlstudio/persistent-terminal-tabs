@@ -1,0 +1,229 @@
+{
+  "name": "persistent-terminal-tabs",
+  "displayName": "Persistent Terminal Tabs",
+  "description": "Browser-style tabs for Claude Code, Codex, and Grok terminal sessions — grouped, crash-persistent, nothing lost.",
+  "version": "1.0.0",
+  "publisher": "norml",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1B1F24",
+    "theme": "dark"
+  },
+  "pricing": "Free",
+  "keywords": [
+    "terminal",
+    "tabs",
+    "tmux",
+    "claude",
+    "codex",
+    "grok",
+    "sessions",
+    "ai"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Norml-Studio/persistent-terminal-tabs.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Norml-Studio/persistent-terminal-tabs/issues"
+  },
+  "homepage": "https://github.com/Norml-Studio/persistent-terminal-tabs",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "terminalTabs",
+          "title": "Persistent Terminal Tabs",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "terminalTabs": [
+        {
+          "id": "terminalTabs.tree",
+          "name": "Sessions"
+        }
+      ]
+    },
+    "commands": [
+      { "command": "terminalTabs.openAll", "title": "Persistent Terminal Tabs: Open All", "icon": "$(run-all)" },
+      { "command": "terminalTabs.newChat", "title": "Persistent Terminal Tabs: New Chat", "icon": "$(add)" },
+      { "command": "terminalTabs.newChatInGroup", "title": "New Chat in Group", "icon": "$(add)" },
+      { "command": "terminalTabs.newCodexChat", "title": "Persistent Terminal Tabs: New Codex Chat", "icon": "$(sparkle)" },
+      { "command": "terminalTabs.newGrokChat", "title": "Persistent Terminal Tabs: New Grok Chat", "icon": "$(rocket)" },
+      { "command": "terminalTabs.newGroup", "title": "Persistent Terminal Tabs: New Group", "icon": "$(new-folder)" },
+      { "command": "terminalTabs.addSession", "title": "Persistent Terminal Tabs: Add Existing Session…" },
+      { "command": "terminalTabs.importCockpit", "title": "Persistent Terminal Tabs: Import Current Terminals (from Cockpit)", "icon": "$(cloud-download)" },
+      { "command": "terminalTabs.openTab", "title": "Open" },
+      { "command": "terminalTabs.openGroup", "title": "Persistent Terminal Tabs: Open Group", "icon": "$(split-horizontal)" },
+      { "command": "terminalTabs.combineGroup", "title": "Persistent Terminal Tabs: Combine Group into Split View", "icon": "$(split-horizontal)" },
+      { "command": "terminalTabs.renameTab", "title": "Rename Chat", "icon": "$(edit)" },
+      { "command": "terminalTabs.regenerateChat", "title": "Regenerate Name + Recap (AI)", "icon": "$(sparkle)" },
+      { "command": "terminalTabs.refreshAllRecaps", "title": "Persistent Terminal Tabs: Refresh All Recaps", "icon": "$(sync)" },
+      { "command": "terminalTabs.searchRecaps", "title": "Persistent Terminal Tabs: Search Recaps", "icon": "$(search)" },
+      { "command": "terminalTabs.dropTab", "title": "Drop (close & remove)", "icon": "$(trash)" },
+      { "command": "terminalTabs.dropGroup", "title": "Drop Group (kill all chats)", "icon": "$(trash)" },
+      { "command": "terminalTabs.renameGroup", "title": "Rename Group", "icon": "$(edit)" },
+      { "command": "terminalTabs.burstGroup", "title": "Persistent Terminal Tabs: Show Group as Grid", "icon": "$(layout)" },
+      { "command": "terminalTabs.collapseGrid", "title": "Persistent Terminal Tabs: Collapse Grid", "icon": "$(screen-normal)" },
+      { "command": "terminalTabs.refresh", "title": "Refresh", "icon": "$(refresh)" },
+      { "command": "terminalTabs.showHistory", "title": "Persistent Terminal Tabs: History", "icon": "$(history)" },
+      { "command": "terminalTabs.showSessions", "title": "Persistent Terminal Tabs: Show Sessions (tmux + RAM)", "icon": "$(server-process)" },
+      { "command": "terminalTabs.cleanOrphans", "title": "Persistent Terminal Tabs: Clean Orphaned tmux Sessions", "icon": "$(clear-all)" },
+      { "command": "terminalTabs.suspendClosed", "title": "Persistent Terminal Tabs: Suspend Closed Tabs (Free RAM)", "icon": "$(moon)" },
+      { "command": "terminalTabs.suspendTab", "title": "Suspend Chat (free its RAM)", "icon": "$(watch)" },
+      { "command": "terminalTabs.showState", "title": "Persistent Terminal Tabs: Show State (debug)" },
+      { "command": "terminalTabs.diagDots", "title": "Persistent Terminal Tabs: Diagnose Dots (refresh + log)", "icon": "$(debug-alt)" }
+    ],
+    "menus": {
+      "view/title": [
+        { "command": "terminalTabs.collapseGrid", "when": "view == terminalTabs.tree && terminalTabs.bursted", "group": "navigation@0" },
+        { "command": "terminalTabs.newChat", "when": "view == terminalTabs.tree", "group": "navigation@1" },
+        { "command": "terminalTabs.newGroup", "when": "view == terminalTabs.tree", "group": "navigation@2" },
+        { "command": "terminalTabs.openAll", "when": "view == terminalTabs.tree", "group": "navigation@3" },
+        { "command": "terminalTabs.refresh", "when": "view == terminalTabs.tree", "group": "navigation@4" },
+        { "command": "terminalTabs.showHistory", "when": "view == terminalTabs.tree", "group": "navigation@5" },
+        { "command": "terminalTabs.showSessions", "when": "view == terminalTabs.tree", "group": "navigation@6" },
+        { "command": "terminalTabs.suspendClosed", "when": "view == terminalTabs.tree", "group": "navigation@7" },
+        { "command": "terminalTabs.searchRecaps", "when": "view == terminalTabs.tree", "group": "navigation@8" },
+        { "command": "terminalTabs.newCodexChat", "when": "view == terminalTabs.tree", "group": "1_ops@0" },
+        { "command": "terminalTabs.newGrokChat", "when": "view == terminalTabs.tree", "group": "1_ops@1" },
+        { "command": "terminalTabs.importCockpit", "when": "view == terminalTabs.tree", "group": "1_ops@2" },
+        { "command": "terminalTabs.cleanOrphans", "when": "view == terminalTabs.tree", "group": "1_ops@3" },
+        { "command": "terminalTabs.refreshAllRecaps", "when": "view == terminalTabs.tree", "group": "1_ops@4" }
+      ],
+      "view/item/context": [
+        { "command": "terminalTabs.regenerateChat", "when": "view == terminalTabs.tree && viewItem == tab", "group": "inline@0" },
+        { "command": "terminalTabs.suspendTab", "when": "view == terminalTabs.tree && viewItem == tab", "group": "inline@1" },
+        { "command": "terminalTabs.renameTab", "when": "view == terminalTabs.tree && viewItem == tab", "group": "inline@2" },
+        { "command": "terminalTabs.dropTab", "when": "view == terminalTabs.tree && viewItem == tab", "group": "inline@3" },
+        { "command": "terminalTabs.suspendTab", "when": "view == terminalTabs.tree && viewItem == tab", "group": "1_modify@0" },
+        { "command": "terminalTabs.regenerateChat", "when": "view == terminalTabs.tree && viewItem == tab", "group": "0_recap@0" },
+        { "command": "terminalTabs.renameTab", "when": "view == terminalTabs.tree && viewItem == tab", "group": "1_modify@1" },
+        { "command": "terminalTabs.newChatInGroup", "when": "view == terminalTabs.tree && viewItem == group", "group": "inline@0" },
+        { "command": "terminalTabs.combineGroup", "when": "view == terminalTabs.tree && viewItem == group", "group": "inline@1" },
+        { "command": "terminalTabs.burstGroup", "when": "view == terminalTabs.tree && viewItem == group", "group": "inline@2" },
+        { "command": "terminalTabs.renameGroup", "when": "view == terminalTabs.tree && viewItem == group", "group": "inline@3" },
+        { "command": "terminalTabs.dropGroup", "when": "view == terminalTabs.tree && viewItem == group", "group": "inline@4" },
+        { "command": "terminalTabs.combineGroup", "when": "view == terminalTabs.tree && viewItem == group", "group": "0_new@0" },
+        { "command": "terminalTabs.newChatInGroup", "when": "view == terminalTabs.tree && viewItem == group", "group": "0_new@1" },
+        { "command": "terminalTabs.burstGroup", "when": "view == terminalTabs.tree && viewItem == group", "group": "1_modify@0" },
+        { "command": "terminalTabs.renameGroup", "when": "view == terminalTabs.tree && viewItem == group", "group": "1_modify@1" },
+        { "command": "terminalTabs.dropGroup", "when": "view == terminalTabs.tree && viewItem == group", "group": "1_modify@2" }
+      ]
+    },
+    "keybindings": [
+      { "command": "workbench.view.extension.terminalTabs", "key": "cmd+alt+t", "mac": "cmd+alt+t", "win": "ctrl+alt+t", "linux": "ctrl+alt+t" }
+    ],
+    "configuration": {
+      "title": "Persistent Terminal Tabs",
+      "properties": {
+        "terminalTabs.openOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "Reopen saved tabs when the window starts. Above 'autoOpenLimit' tabs this becomes lazy — the panel is shown but chats open on click (so 40+ sessions don't all load at once and OOM the machine)."
+        },
+        "terminalTabs.autoOpenLimit": {
+          "type": "number",
+          "default": 8,
+          "description": "Max saved tabs to auto-launch on startup. Past this, startup is lazy (show the panel, open chats on demand) to avoid a memory stampede. Set high only if you have lots of RAM."
+        },
+        "terminalTabs.closeToDrop": {
+          "type": "boolean",
+          "default": false,
+          "description": "When ON, closing a terminal tab removes it from the panel AND kills its tmux session (a permanent delete). Default OFF (safe): closing keeps the TAB — only the Drop (trash) button removes it. What happens to the session on close is then governed by 'suspendOnClose'."
+        },
+        "terminalTabs.suspendOnClose": {
+          "type": "boolean",
+          "default": false,
+          "description": "Default OFF: closing a tab only DETACHES it — its tmux session keeps running in the background (🟡), so closing/reloading never stops work and reopening reattaches instantly. Turn ON to instead KILL the session on close (🟡→⚪): a closed chat then costs ZERO RAM and cold-resumes from its transcript on click. Either way the TAB is kept. To free RAM deliberately use the ⏳ Suspend button on a chat (one) or 🌙 Suspend Closed Tabs (all). Only consulted when closeToDrop is OFF."
+        },
+        "terminalTabs.autoSuspendHours": {
+          "type": "number",
+          "default": 12,
+          "description": "Auto-suspend a CLOSED tab's tmux session after it's been idle (no terminal output) for this many hours — frees its RAM while KEEPING the tab (it re-resumes from its transcript on click). Sessions doing background work keep their activity fresh and are never touched; only genuinely-parked sessions are reaped. Runs at startup and every 30 min. Set 0 to disable. The manual 'Suspend Closed Tabs (Free RAM)' button (🌙) ignores this and suspends every closed session now."
+        },
+        "terminalTabs.closeDebounceMs": {
+          "type": "number",
+          "default": 800,
+          "description": "Grace window (ms) to distinguish a deliberate tab close from a window reload/shutdown."
+        },
+        "terminalTabs.autoRecapOnOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "When you open a chat whose transcript has GROWN since its last recap, refresh its AI recap quietly in the background (one small Haiku call) — keeps the searchable summary current automatically. A title you set by hand is never touched; only the AI recap text updates. The ✨ button is always the manual override. Set OFF to only ever recap via the button."
+        },
+        "terminalTabs.useTmux": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use tmux for live crash-persistence (macOS/Linux). Off = plain terminals."
+        },
+        "terminalTabs.claudeCommand": {
+          "type": "string",
+          "default": "claude",
+          "description": "The Claude Code CLI command used to start/resume sessions."
+        },
+        "terminalTabs.defaultAgent": {
+          "type": "string",
+          "enum": ["claude", "codex", "grok"],
+          "default": "claude",
+          "description": "Which agent CLI a plain New Chat launches. Use New Codex Chat or New Grok Chat to override per-tab."
+        },
+        "terminalTabs.codexCommand": {
+          "type": "string",
+          "default": "codex",
+          "description": "The Codex CLI command used to start/resume sessions (must be on PATH)."
+        },
+        "terminalTabs.codexResumeArgs": {
+          "type": "string",
+          "default": "resume {id}",
+          "description": "Args to resume an existing Codex session. {id} is replaced with the session id. Tune to match your Codex CLI."
+        },
+        "terminalTabs.codexNewArgs": {
+          "type": "string",
+          "default": "",
+          "description": "Args to start a new Codex session ({id} replaced with the session id; empty = launch Codex fresh)."
+        },
+        "terminalTabs.grokCommand": {
+          "type": "string",
+          "default": "grok",
+          "description": "The Grok CLI command used to start/resume sessions (must be on PATH)."
+        },
+        "terminalTabs.grokResumeArgs": {
+          "type": "string",
+          "default": "--resume {id}",
+          "description": "Args to resume an existing Grok session. {id} is replaced with the session id."
+        },
+        "terminalTabs.grokNewArgs": {
+          "type": "string",
+          "default": "--session-id {id}",
+          "description": "Args to start a new Grok session. {id} is replaced with the PTT tab id so recap/resume stay pinned."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.0",
+    "typescript": "^5.4.0"
+  }
+}
