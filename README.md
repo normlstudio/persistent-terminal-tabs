@@ -77,4 +77,4 @@ npx vsce package
 
 ## License
 
-MIT © Norml Studio
+MIT © Max Tymoshyn

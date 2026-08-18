@@ -3,7 +3,8 @@
   "displayName": "Persistent Terminal Tabs",
   "description": "Browser-style tabs for Claude Code, Codex, and Grok terminal sessions — grouped, crash-persistent, nothing lost.",
   "version": "1.0.0",
-  "publisher": "norml",
+  "publisher": "maxtymosh",
+  "author": "Max Tymoshyn",
   "license": "MIT",
   "icon": "media/icon.png",
   "galleryBanner": {
