@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
-import { NEW_GROUP, StateStore } from './state';
-import { friendlyProject } from './sessions';
+import { NEW_GROUP, StateStore, agentDisplayName } from './state';
 
 /** A row in the panel: a group header, or a chat tab inside one. */
 export type Node =
@@ -116,7 +115,7 @@ export class TabsTree
     const meta = this.store.meta(node.id);
     const item = new vscode.TreeItem(meta?.title || node.id.slice(0, 8), vscode.TreeItemCollapsibleState.None);
     item.id = `tab:${node.id}`;
-    item.description = meta?.cwd ? friendlyProject(meta.cwd) : node.id.slice(0, 8);
+    item.description = agentDisplayName(meta);
     item.contextValue = 'tab';
     // Tri-state dot: 🟢 Open (attached + running) · 🟡 Detached (tmux running in background, click to reattach) ·
     // ⚪ Suspended (no tmux — a pointer; click to cold-resume from transcript).

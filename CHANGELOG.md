@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.1
+
+- Panel row description (and native tab prefix) shows the agent — Claude, Codex, Grok, Gemini — instead of the folder name
+
 ## 1.1.0
 
 - Antigravity CLI (`agy`) recap, rename, resume, and **New Antigravity Chat**

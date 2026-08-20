@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { StateStore, StateData, NEW_GROUP, SessionMeta, AgentKind, workspaceSlug, rememberCodexLink, rememberGrokLink, rememberAgyLink } from './state';
+import { StateStore, StateData, NEW_GROUP, SessionMeta, AgentKind, workspaceSlug, rememberCodexLink, rememberGrokLink, rememberAgyLink, agentDisplayName } from './state';
 import { TabsTree, Node, Arrange } from './tree';
 import { tmuxAvailable, tmuxLaunch, killSession, hasTranscript, hasCodexSession, hasGrokSession, hasAgySession, AgentSpec, applyTmuxConf, listSessions, TmuxSessionInfo, tmuxDiag, liveCodexTranscript, liveGrokTranscript, liveAgyTranscript } from './tmux';
 import { friendlyProject, discoverSessions, transcriptCwd, transcriptCwds } from './sessions';
@@ -389,7 +389,7 @@ function openTerminal(id: string, meta: SessionMeta, restored: boolean, editorCo
   if (!orphaned && realCwd !== meta.cwd) { meta.cwd = realCwd; store.save(); } // self-heal a moved slice cwd
   const title = meta.title || id.slice(0, 8);
   // auto-name by the folder it runs in: "{folder} · {title}" (like Manage Terminals)
-  const label = `${friendlyProject(meta.cwd)} · ${title}`;
+  const label = `${agentDisplayName(meta)} · ${title}`;
   const opts: vscode.TerminalOptions = {
     name: label.length > 46 ? label.slice(0, 45) + '…' : label,
     isTransient: true,
@@ -989,7 +989,7 @@ async function relabelTerminal(id: string): Promise<void> {
   const t = terminalFor(id);
   const meta = store.meta(id);
   if (!t || !meta) return;
-  const label = `${friendlyProject(meta.cwd)} · ${meta.title || id.slice(0, 8)}`;
+  const label = `${agentDisplayName(meta)} · ${meta.title || id.slice(0, 8)}`;
   t.show();
   try {
     await vscode.commands.executeCommand('workbench.action.terminal.renameWithArg', { name: label.length > 46 ? label.slice(0, 45) + '…' : label });
@@ -1302,7 +1302,7 @@ async function renameTab(node: Node): Promise<void> {
   const t = terminalFor(node.id);
   if (t) {
     t.show();
-    const label = `${friendlyProject(meta?.cwd ?? '')} · ${next}`;
+    const label = `${agentDisplayName(meta)} · ${next}`;
     try {
       await vscode.commands.executeCommand('workbench.action.terminal.renameWithArg', {
         name: label.length > 46 ? label.slice(0, 45) + '…' : label,

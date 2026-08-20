@@ -37,6 +37,15 @@ export interface SessionMeta {
   titleLocked?: boolean;
 }
 
+/** Short label for the panel description / native tab prefix. Bound session ids win over `agent`. */
+export function agentDisplayName(meta?: SessionMeta): string {
+  if (!meta) return 'Claude';
+  if (meta.agySessionId || meta.recapAgent === 'agy' || meta.agent === 'agy') return 'Gemini';
+  if (meta.grokSessionId || meta.recapAgent === 'grok' || meta.agent === 'grok') return 'Grok';
+  if (meta.codexSessionId || meta.recapAgent === 'codex' || meta.agent === 'codex') return 'Codex';
+  return 'Claude';
+}
+
 export interface Group {
   name: string;
   /** Optional VS Code ThemeColor id (e.g. "charts.blue") for the group icon. */
