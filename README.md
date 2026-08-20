@@ -1,6 +1,6 @@
 # Persistent Terminal Tabs
 
-Browser-style tabs for [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), and [Grok](https://grok.x.ai) sessions inside VS Code.
+Browser-style tabs for [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), [Grok](https://grok.x.ai), and [Antigravity](https://antigravity.google/docs/cli/using/) (`agy`) sessions inside VS Code.
 
 Group chats, keep them alive across reloads, drop the ones you are done with, and search them later by an AI recap. Closing a tab is safe: the session detaches instead of dying. Only **Drop** removes it.
 
@@ -8,7 +8,7 @@ Group chats, keep them alive across reloads, drop the ones you are done with, an
 
 - **Grouped tabs** in a sidebar panel. Drag to reorder or move between groups.
 - **Crash persistence** via tmux on macOS/Linux. Reload reattaches the live process. A reboot cold-resumes from the transcript.
-- **Claude, Codex, and Grok.** New Chat / New Codex Chat / New Grok Chat. Recap and resume work for all three, including a Grok or Codex process typed into an older Claude-labelled tab.
+- **Claude, Codex, Grok, and Antigravity.** New Chat / New Codex Chat / New Grok Chat / New Antigravity Chat. Recap and resume work for all four, including a Grok, Codex, or `agy` process typed into an older Claude-labelled tab.
 - **✨ Regenerate Name + Recap.** Reads the chat transcript and writes a short title plus a searchable summary. Manual rename is never overwritten.
 - **Search recaps** across current tabs and dropped-chat history.
 - **Suspend** one chat or every closed chat to free RAM. Click the grey row to resume.
@@ -25,7 +25,7 @@ Status dots:
 
 - VS Code 1.85+
 - [tmux](https://github.com/tmux/tmux) on macOS/Linux (recommended). Windows runs without tmux (plain terminals, no live reattach).
-- The agent CLIs you use (`claude`, `codex`, `grok`) on `PATH`
+- The agent CLIs you use (`claude`, `codex`, `grok`, `agy`) on `PATH`
 
 ## Install
 
@@ -45,7 +45,7 @@ Then **Developer: Reload Window**.
 ## Daily use
 
 1. Open the **Persistent Terminal Tabs** view (Activity Bar, or `Cmd+Alt+T` / `Ctrl+Alt+T`).
-2. **+** starts a new chat in `📥 New`. Type `claude`, `codex`, or `grok` in the shell — or use **New Codex Chat** / **New Grok Chat**.
+2. **+** starts a new chat in `📥 New`. Type `claude`, `codex`, `grok`, or `agy` in the shell — or use **New Codex / Grok / Antigravity Chat**.
 3. Drag chats into groups. Click a group to open it as one split tab.
 4. Press ✨ on a chat to generate a name and recap.
 5. Close a tab to park it (🟡). **Drop** (trash) to remove it. **Suspend** (⏳ / 🌙) to free RAM.
@@ -59,7 +59,7 @@ See **Persistent Terminal Tabs** in VS Code settings. The important ones:
 - `terminalTabs.openOnStartup` / `autoOpenLimit` — how many tabs reopen automatically
 - `terminalTabs.closeToDrop` — off by default (close parks; Drop deletes)
 - `terminalTabs.useTmux` — live persistence
-- `terminalTabs.defaultAgent` — `claude` · `codex` · `grok`
+- `terminalTabs.defaultAgent` — `claude` · `codex` · `grok` · `agy`
 - `terminalTabs.autoRecapOnOpen` — refresh the recap when a transcript has grown
 
 ## Develop

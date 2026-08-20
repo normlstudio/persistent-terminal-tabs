@@ -6,7 +6,7 @@ import * as path from 'path';
 export const NEW_GROUP = '📥 New';
 
 /** Which CLI agent runs in a tab. Drives how it's launched/resumed. `undefined` == 'claude' (back-compat). */
-export type AgentKind = 'claude' | 'codex' | 'grok';
+export type AgentKind = 'claude' | 'codex' | 'grok' | 'agy';
 
 export interface SessionMeta {
   title: string;
@@ -31,6 +31,8 @@ export interface SessionMeta {
   /** Exact Grok session uuid powering this PTT tab. Same role as `codexSessionId`: Grok typed into an older
    *  Claude-labelled shell has its own id, and we must not change `agent` or the Claude resume recipe breaks. */
   grokSessionId?: string;
+  /** Exact Antigravity (`agy`) conversation uuid. Same role as `grokSessionId`. */
+  agySessionId?: string;
   /** true once the user manually renamed the chat — auto-naming/recap then never overwrites the title. */
   titleLocked?: boolean;
 }
@@ -55,6 +57,7 @@ const INDEX_FILE = path.join(STATE_DIR, 'index.json');
 const LEGACY_FILE = path.join(STATE_DIR, 'state.json'); // pre-partition single global file
 const CODEX_LINKS_FILE = path.join(STATE_DIR, 'codex-links.json');
 const GROK_LINKS_FILE = path.join(STATE_DIR, 'grok-links.json');
+const AGY_LINKS_FILE = path.join(STATE_DIR, 'agy-links.json');
 
 type IdLinks = Record<string, string>;
 
@@ -95,6 +98,14 @@ export function rememberGrokLink(pttId: string, grokSessionId: string): void {
   if (links[pttId] === grokSessionId) return;
   links[pttId] = grokSessionId;
   writeLinks(GROK_LINKS_FILE, links);
+}
+
+export function rememberAgyLink(pttId: string, agySessionId: string): void {
+  if (!pttId || !agySessionId) return;
+  const links = readLinks(AGY_LINKS_FILE);
+  if (links[pttId] === agySessionId) return;
+  links[pttId] = agySessionId;
+  writeLinks(AGY_LINKS_FILE, links);
 }
 
 export function emptyStateData(): StateData {
@@ -149,9 +160,18 @@ export class StateStore {
       if (!meta) continue;
       meta.grokSessionId = grokSessionId;
       // Don't overwrite a Codex recapAgent — a tab can't be both, but keep the last exact live bind if one raced.
-      if (meta.recapAgent !== 'codex') {
+      if (meta.recapAgent !== 'codex' && meta.recapAgent !== 'agy') {
         meta.recapAgent = 'grok';
         meta.recapSessionId = grokSessionId;
+      }
+    }
+    for (const [id, agySessionId] of Object.entries(readLinks(AGY_LINKS_FILE))) {
+      const meta = this.data.sessions[id];
+      if (!meta) continue;
+      meta.agySessionId = agySessionId;
+      if (meta.recapAgent !== 'codex' && meta.recapAgent !== 'grok') {
+        meta.recapAgent = 'agy';
+        meta.recapSessionId = agySessionId;
       }
     }
     // Guarantee the inbox always exists.

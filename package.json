@@ -1,8 +1,8 @@
 {
   "name": "persistent-terminal-tabs",
   "displayName": "Persistent Terminal Tabs",
-  "description": "Browser-style tabs for Claude Code, Codex, and Grok terminal sessions — grouped, crash-persistent, nothing lost.",
-  "version": "1.0.0",
+  "description": "Browser-style tabs for Claude Code, Codex, Grok, and Antigravity terminal sessions — grouped, crash-persistent, nothing lost.",
+  "version": "1.1.0",
   "publisher": "maxtymosh",
   "author": "Max Tymoshyn",
   "license": "MIT",
@@ -19,6 +19,8 @@
     "claude",
     "codex",
     "grok",
+    "antigravity",
+    "agy",
     "sessions",
     "ai"
   ],
@@ -64,6 +66,7 @@
       { "command": "terminalTabs.newChatInGroup", "title": "New Chat in Group", "icon": "$(add)" },
       { "command": "terminalTabs.newCodexChat", "title": "Persistent Terminal Tabs: New Codex Chat", "icon": "$(sparkle)" },
       { "command": "terminalTabs.newGrokChat", "title": "Persistent Terminal Tabs: New Grok Chat", "icon": "$(rocket)" },
+      { "command": "terminalTabs.newAgyChat", "title": "Persistent Terminal Tabs: New Antigravity Chat", "icon": "$(rocket)" },
       { "command": "terminalTabs.newGroup", "title": "Persistent Terminal Tabs: New Group", "icon": "$(new-folder)" },
       { "command": "terminalTabs.addSession", "title": "Persistent Terminal Tabs: Add Existing Session…" },
       { "command": "terminalTabs.importCockpit", "title": "Persistent Terminal Tabs: Import Current Terminals (from Cockpit)", "icon": "$(cloud-download)" },
@@ -101,9 +104,10 @@
         { "command": "terminalTabs.searchRecaps", "when": "view == terminalTabs.tree", "group": "navigation@8" },
         { "command": "terminalTabs.newCodexChat", "when": "view == terminalTabs.tree", "group": "1_ops@0" },
         { "command": "terminalTabs.newGrokChat", "when": "view == terminalTabs.tree", "group": "1_ops@1" },
-        { "command": "terminalTabs.importCockpit", "when": "view == terminalTabs.tree", "group": "1_ops@2" },
-        { "command": "terminalTabs.cleanOrphans", "when": "view == terminalTabs.tree", "group": "1_ops@3" },
-        { "command": "terminalTabs.refreshAllRecaps", "when": "view == terminalTabs.tree", "group": "1_ops@4" }
+        { "command": "terminalTabs.newAgyChat", "when": "view == terminalTabs.tree", "group": "1_ops@2" },
+        { "command": "terminalTabs.importCockpit", "when": "view == terminalTabs.tree", "group": "1_ops@3" },
+        { "command": "terminalTabs.cleanOrphans", "when": "view == terminalTabs.tree", "group": "1_ops@4" },
+        { "command": "terminalTabs.refreshAllRecaps", "when": "view == terminalTabs.tree", "group": "1_ops@5" }
       ],
       "view/item/context": [
         { "command": "terminalTabs.regenerateChat", "when": "view == terminalTabs.tree && viewItem == tab", "group": "inline@0" },
@@ -178,9 +182,9 @@
         },
         "terminalTabs.defaultAgent": {
           "type": "string",
-          "enum": ["claude", "codex", "grok"],
+          "enum": ["claude", "codex", "grok", "agy"],
           "default": "claude",
-          "description": "Which agent CLI a plain New Chat launches. Use New Codex Chat or New Grok Chat to override per-tab."
+          "description": "Which agent CLI a plain New Chat launches. Use New Codex / Grok / Antigravity Chat to override per-tab."
         },
         "terminalTabs.codexCommand": {
           "type": "string",
@@ -211,6 +215,21 @@
           "type": "string",
           "default": "--session-id {id}",
           "description": "Args to start a new Grok session. {id} is replaced with the PTT tab id so recap/resume stay pinned."
+        },
+        "terminalTabs.agyCommand": {
+          "type": "string",
+          "default": "agy",
+          "description": "The Antigravity CLI command used to start/resume sessions (must be on PATH)."
+        },
+        "terminalTabs.agyResumeArgs": {
+          "type": "string",
+          "default": "--conversation {id}",
+          "description": "Args to resume an existing Antigravity conversation. {id} is replaced with the conversation id."
+        },
+        "terminalTabs.agyNewArgs": {
+          "type": "string",
+          "default": "",
+          "description": "Args to start a new Antigravity session (empty = launch agy fresh; it assigns its own conversation id)."
         }
       }
     }

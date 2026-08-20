@@ -29,7 +29,7 @@ export interface HistoryEntry {
   title: string;       // human title at the time
   group: string;       // the group it was in
   cwd: string;         // the folder it ran in (needed to resume correctly)
-  agent: string;       // 'claude' | 'codex' | 'grok'
+  agent: string;       // 'claude' | 'codex' | 'grok' | 'agy'
   recap?: string;      // the chat's last AI recap, frozen at this moment — searchable forever
   note?: string;       // e.g. rename old→new
 }

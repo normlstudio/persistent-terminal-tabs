@@ -169,6 +169,18 @@ function ensureResumeRc(): void {
         '    fi',
         '    command grok --session-id "$TT_SESSION_ID" "$@"',
         '  }',
+        '  # Antigravity CLI (`agy`) cannot pin a new conversation to the PTT uuid. Resume a bound id via',
+        '  # --conversation; otherwise launch fresh. User-supplied --conversation/--continue/-c pass through.',
+        '  agy() {',
+        '    case " $* " in',
+        '      (*" --conversation"*|*" --continue"*|*" -c "*|*" -c")',
+        '        command agy "$@"; return;;',
+        '    esac',
+        '    if [ -n "$TT_AGY_SESSION_ID" ]; then',
+        '      command agy --conversation "$TT_AGY_SESSION_ID" "$@"; return',
+        '    fi',
+        '    command agy "$@"',
+        '  }',
         'fi',
         '',
         'if [ -n "$TT_RESUME_CMD" ]; then',
@@ -299,6 +311,22 @@ function grokSessionDir(id: string): string | undefined {
 /** Best-effort: does a Grok session directory for this id already exist under ~/.grok/sessions? */
 export function hasGrokSession(id: string): boolean {
   return !!grokSessionDir(id);
+}
+
+function agyTranscriptPath(id: string): string | undefined {
+  const base = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain', id, '.system_generated', 'logs');
+  for (const name of ['transcript.jsonl', 'transcript_full.jsonl']) {
+    const f = path.join(base, name);
+    try { if (fs.existsSync(f)) return f; } catch { /* missing */ }
+  }
+  const db = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'conversations', `${id}.db`);
+  try { if (fs.existsSync(db)) return db; } catch { /* missing */ }
+  return undefined;
+}
+
+/** Best-effort: does an Antigravity conversation exist for this id? */
+export function hasAgySession(id: string): boolean {
+  return !!agyTranscriptPath(id);
 }
 
 function grokHistoryPath(sessionDir: string | undefined): string | undefined {
@@ -546,6 +574,79 @@ export function liveGrokTranscript(id: string): string | undefined {
   }
 }
 
+/**
+ * Return the brain transcript of the Antigravity (`agy`) conversation in a PTT pane. Prefer the presence lock
+ * and brain dir held open by the live process; then `agy --conversation <uuid>` in the process tree.
+ */
+export function liveAgyTranscript(id: string): string | undefined {
+  const tmux = tmuxPath();
+  if (!tmux) return undefined;
+  try {
+    const pane = cp.execFileSync(
+      tmux,
+      [...socketArgs(), 'list-panes', '-t', sessionName(id), '-F', '#{pane_pid}|#{pane_current_command}'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    ).trim().split('\n')[0];
+    const [root, command] = pane.split('|');
+    if (!root) return undefined;
+    if (!/\bagy\b/i.test(command ?? '')) return undefined;
+
+    const children = new Map<string, string[]>();
+    const commands = new Map<string, string>();
+    for (const line of cp.execFileSync('ps', ['-Ao', 'pid=,ppid=,command='], { encoding: 'utf8' }).split('\n')) {
+      const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
+      if (!match) continue;
+      const [, pid, ppid, processCommand] = match;
+      if (!pid || !ppid) continue;
+      commands.set(pid, processCommand);
+      const list = children.get(ppid) ?? [];
+      list.push(pid);
+      children.set(ppid, list);
+    }
+    const pids: string[] = [];
+    const seen = new Set<string>();
+    const stack = [root];
+    while (stack.length) {
+      const pid = stack.pop() as string;
+      if (seen.has(pid)) continue;
+      seen.add(pid); pids.push(pid);
+      for (const child of children.get(pid) ?? []) stack.push(child);
+    }
+    if (!pids.length) return undefined;
+
+    for (const pid of pids) {
+      const match = commands.get(pid)?.match(
+        /\bagy(?:\s+\S+)*\s+--conversation(?:=|\s+)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i,
+      );
+      if (match) {
+        const file = agyTranscriptPath(match[1]);
+        if (file && file.endsWith('.jsonl')) return file;
+      }
+    }
+
+    const lsof = ['/usr/sbin/lsof', '/usr/bin/lsof'].find((candidate) => fs.existsSync(candidate)) ?? 'lsof';
+    let raw = '';
+    try {
+      raw = cp.execFileSync(lsof, ['-Fn', '-p', pids.join(',')], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch (e) {
+      raw = String((e as { stdout?: string }).stdout ?? '');
+    }
+    const ids = new Set<string>();
+    for (const line of raw.split('\n')) {
+      if (!line.startsWith('n')) continue;
+      const m = line.slice(1).match(/\/antigravity-cli\/(?:presence|brain|conversations)\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+      if (m) ids.add(m[1]);
+    }
+    for (const sessionId of ids) {
+      const file = agyTranscriptPath(sessionId);
+      if (file && file.endsWith('.jsonl')) return file;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Truly end a chat (drop). Detaching keeps it alive; this kills it. */
 export function killSession(id: string): void {
   const tmux = tmuxPath();
@@ -583,7 +684,7 @@ export function sessionDropped(id: string): boolean {
       .split('\n')[0];
     if (!pid) return false;
     const cmd = cp.execFileSync('ps', ['-ww', '-o', 'command=', '-p', pid], { encoding: 'utf8' }).trim();
-    return !/\bclaude\b|\bcodex\b|\bgrok\b/i.test(cmd);
+    return !/\bclaude\b|\bcodex\b|\bgrok\b|\bagy\b/i.test(cmd);
   } catch {
     return false; // no session (or can't tell) → treat as not-dropped; new-session -A will create it fresh
   }

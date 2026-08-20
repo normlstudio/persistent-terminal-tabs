@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.0
+
+- Antigravity CLI (`agy`) recap, rename, resume, and **New Antigravity Chat**
+- Live-binds `agy` typed into an older Claude-labelled tab to `~/.gemini/antigravity-cli/brain/<id>/` transcripts
+
 ## 1.0.0
 
 First public release.

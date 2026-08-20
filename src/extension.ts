@@ -3,12 +3,12 @@ import { randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { StateStore, StateData, NEW_GROUP, SessionMeta, AgentKind, workspaceSlug, rememberCodexLink, rememberGrokLink } from './state';
+import { StateStore, StateData, NEW_GROUP, SessionMeta, AgentKind, workspaceSlug, rememberCodexLink, rememberGrokLink, rememberAgyLink } from './state';
 import { TabsTree, Node, Arrange } from './tree';
-import { tmuxAvailable, tmuxLaunch, killSession, hasTranscript, hasCodexSession, hasGrokSession, AgentSpec, applyTmuxConf, listSessions, TmuxSessionInfo, tmuxDiag, liveCodexTranscript, liveGrokTranscript } from './tmux';
+import { tmuxAvailable, tmuxLaunch, killSession, hasTranscript, hasCodexSession, hasGrokSession, hasAgySession, AgentSpec, applyTmuxConf, listSessions, TmuxSessionInfo, tmuxDiag, liveCodexTranscript, liveGrokTranscript, liveAgyTranscript } from './tmux';
 import { friendlyProject, discoverSessions, transcriptCwd, transcriptCwds } from './sessions';
 import { recordHistory, readHistory, historyPath, HistoryEvent } from './history';
-import { generateRecap, RecapOptions, RecapSource, transcriptMtime, grokSessionIdFromFile } from './recaps';
+import { generateRecap, Recap, RecapOptions, RecapSource, transcriptMtime, grokSessionIdFromFile, agySessionIdFromFile } from './recaps';
 
 /*
  * SLICE + GROUPS. Proven so far: close→drop, reload→restore-the-set, mass-close≠drop, stray-dispose.
@@ -104,12 +104,20 @@ function agentSpec(kind: AgentKind): AgentSpec {
       newArgs: cfg('grokNewArgs', '--session-id {id}'),
     };
   }
+  if (kind === 'agy') {
+    return {
+      command: cfg('agyCommand', 'agy'),
+      resumeArgs: cfg('agyResumeArgs', '--conversation {id}'),
+      newArgs: cfg('agyNewArgs', ''),
+    };
+  }
   return { command: cfg('claudeCommand', 'claude'), resumeArgs: '--resume {id}', newArgs: '--session-id {id}' };
 }
 /** Does a prior transcript exist for this id, under the agent's own store? (resume vs fresh). */
 function hasPriorSession(id: string, cwd: string, kind: AgentKind): boolean {
   if (kind === 'codex') return hasCodexSession(id);
   if (kind === 'grok') return hasGrokSession(id);
+  if (kind === 'agy') return hasAgySession(id);
   return hasTranscript(id, cwd);
 }
 /** Stable key for THIS window's workspace: its .code-workspace path, else root folder, else a shared empty-window slot. */
@@ -218,10 +226,38 @@ function bindLiveGrokSessions(): boolean {
   return true;
 }
 
+function bindLiveAgySessions(): boolean {
+  if (!useTmux) return false;
+  const candidates = listSessions().filter((s) => /\bagy\b/i.test(s.command));
+  const newlyBound: string[] = [];
+  for (const session of candidates) {
+    const id = store.allIds().find((saved) => saved.startsWith(session.id));
+    if (!id) continue;
+    const meta = store.meta(id);
+    if (!meta || meta.agySessionId) continue;
+    const agySessionId = agySessionIdFromFile(liveAgyTranscript(session.id) ?? '');
+    if (!agySessionId) continue;
+    meta.agySessionId = agySessionId;
+    meta.recapAgent = 'agy';
+    meta.recapSessionId = agySessionId;
+    rememberAgyLink(id, agySessionId);
+    newlyBound.push(id);
+  }
+  if (!newlyBound.length) return false;
+  store.save();
+  for (const id of newlyBound) {
+    const meta = store.meta(id);
+    if (meta && /^chat \d+$/i.test(meta.title) && !meta.titleLocked) autoRecapOnOpen(id);
+  }
+  log(`⌁ bound ${newlyBound.length} live Antigravity tab(s) to their exact conversation`);
+  return true;
+}
+
 function bindLiveForeignSessions(): boolean {
   const codex = bindLiveCodexSessions();
   const grok = bindLiveGrokSessions();
-  return codex || grok;
+  const agy = bindLiveAgySessions();
+  return codex || grok || agy;
 }
 /** Is this chat's tmux session alive (attached OR detached)? Reads the cache, keyed by 8-char id. */
 function sessionAliveCached(id: string): boolean {
@@ -342,10 +378,11 @@ function openTerminal(id: string, meta: SessionMeta, restored: boolean, editorCo
   const group = store.groupOf(id)?.name ?? NEW_GROUP;
   // `agent` remains the original tab recipe for compatibility, but a captured Codex/Grok session is authoritative
   // for recovery. This is what makes a legacy Claude-labelled shell reopen its real conversation after Cmd+R.
+  const agySessionId = meta.agySessionId ?? (meta.recapAgent === 'agy' ? meta.recapSessionId : undefined);
   const grokSessionId = meta.grokSessionId ?? (meta.recapAgent === 'grok' ? meta.recapSessionId : undefined);
   const codexSessionId = meta.codexSessionId ?? (meta.recapAgent === 'codex' ? meta.recapSessionId : undefined);
-  const kind: AgentKind = grokSessionId ? 'grok' : codexSessionId ? 'codex' : meta.agent ?? 'claude';
-  const resumeId = kind === 'grok' ? grokSessionId ?? id : kind === 'codex' ? codexSessionId ?? id : id;
+  const kind: AgentKind = agySessionId ? 'agy' : grokSessionId ? 'grok' : codexSessionId ? 'codex' : meta.agent ?? 'claude';
+  const resumeId = kind === 'agy' ? agySessionId ?? id : kind === 'grok' ? grokSessionId ?? id : kind === 'codex' ? codexSessionId ?? id : id;
   // Resolve + self-heal the REAL folder FIRST (the transcript's cwd is ground truth), so the label shows the
   // actual folder the session runs in — not a stale/default cwd cached at import (the ".claude" Max saw).
   const { cwd: realCwd, orphaned, recordedCwd } = resolveLaunchCwd(id, meta.cwd, kind);
@@ -374,9 +411,12 @@ function openTerminal(id: string, meta: SessionMeta, restored: boolean, editorCo
   const note = doomed
     ? `PTT: this chats folder is gone/moved (was: ${recordedCwd ?? 'unknown'}). Restore or recreate that folder, cd into it, then run: command claude --resume ${id}`
     : undefined;
-  const grokPin = grokSessionId && grokSessionId !== id ? `TT_GROK_SESSION_ID="${grokSessionId}"` : '';
+  const pins = [
+    grokSessionId && grokSessionId !== id ? `TT_GROK_SESSION_ID="${grokSessionId}"` : '',
+    agySessionId && agySessionId !== id ? `TT_AGY_SESSION_ID="${agySessionId}"` : '',
+  ].filter(Boolean).join(' ');
   const launch = useTmux
-    ? tmuxLaunch(id, realCwd, agentSpec(kind), prior && !doomed, note, resumeId, grokPin)
+    ? tmuxLaunch(id, realCwd, agentSpec(kind), prior && !doomed, note, resumeId, pins)
     : null;
   if (launch) {
     opts.shellPath = launch.shellPath;
@@ -394,7 +434,7 @@ function openTerminal(id: string, meta: SessionMeta, restored: boolean, editorCo
 function newChat(agent: AgentKind = 'claude', targetGroup?: string): void {
   pruneDeadTerminals(); // so anchorFor below finds the group's LIVE pane (a stale one would open a new tab unsplit)
   const id = randomUUID();
-  const title = `${agent === 'codex' ? 'codex' : agent === 'grok' ? 'grok' : 'chat'} ${++counter}`;
+  const title = `${agent === 'codex' ? 'codex' : agent === 'grok' ? 'grok' : agent === 'agy' ? 'agy' : 'chat'} ${++counter}`;
   // explicit target (the "+" on a group row, or the top "+" which pins 📥 New) wins over the selection
   const group = targetGroup ?? currentGroup();
   // inherit the target group's folder ONLY for a real group (the group "+"), so the chat lands next to its
@@ -760,7 +800,21 @@ function hist(id: string, event: HistoryEvent): void {
  * often have a real Codex process inside a Claude-labelled shell. A live tmux→lsof match is exact; a previously
  * saved Codex rollout id is the safe post-exit fallback. Only explicit Codex tabs use the final cwd fallback.
  */
+function recapBindId(r: Recap): string | undefined {
+  if (r.source === 'agy') return r.agySessionId;
+  if (r.source === 'grok') return r.grokSessionId;
+  if (r.source === 'codex') return r.codexSessionId;
+  return undefined;
+}
+
 function recapOptions(id: string, m?: SessionMeta): RecapOptions {
+  const liveAgy = liveAgyTranscript(id);
+  if (liveAgy) {
+    return { cwd: m?.cwd, preferAgy: true, agySessionId: agySessionIdFromFile(liveAgy) };
+  }
+  if (m?.agySessionId || m?.recapAgent === 'agy' || m?.agent === 'agy') {
+    return { cwd: m?.cwd, preferAgy: true, agySessionId: m?.agySessionId ?? m?.recapSessionId };
+  }
   const liveGrok = liveGrokTranscript(id);
   if (liveGrok) {
     return { cwd: m?.cwd, preferGrok: true, grokSessionId: grokSessionIdFromFile(liveGrok) };
@@ -780,7 +834,12 @@ function recapOptions(id: string, m?: SessionMeta): RecapOptions {
 }
 
 function rememberRecapSource(id: string, meta: SessionMeta, opts: RecapOptions, source?: RecapSource, sessionId?: string): void {
-  if (source === 'grok') {
+  if (source === 'agy') {
+    meta.recapAgent = 'agy';
+    meta.recapSessionId = sessionId ?? opts.agySessionId;
+    meta.agySessionId = sessionId ?? opts.agySessionId ?? meta.agySessionId;
+    if (meta.agySessionId) rememberAgyLink(id, meta.agySessionId);
+  } else if (source === 'grok') {
     meta.recapAgent = 'grok';
     meta.recapSessionId = sessionId ?? opts.grokSessionId;
     meta.grokSessionId = sessionId ?? opts.grokSessionId ?? meta.grokSessionId;
@@ -810,11 +869,11 @@ async function regenerateChat(node?: Node): Promise<void> {
       const opts = recapOptions(node.id, meta);
       const r = await generateRecap(node.id, opts);
       if (!r) {
-        vscode.window.showWarningMessage('Could not recap this chat — no Claude, Codex, or Grok transcript yet, or the call failed.');
+        vscode.window.showWarningMessage('Could not recap this chat — no Claude, Codex, Grok, or Antigravity transcript yet, or the call failed.');
         return;
       }
       if (r.recap) meta.recap = r.recap;
-      rememberRecapSource(node.id, meta, opts, r.source, r.source === 'grok' ? r.grokSessionId : r.codexSessionId);
+      rememberRecapSource(node.id, meta, opts, r.source, recapBindId(r));
       meta.recapAt = transcriptMtime(node.id, recapOptions(node.id, meta));
       if (r.title && !meta.titleLocked) meta.title = r.title; // never clobber a manual name
       store.save();
@@ -848,7 +907,7 @@ function autoRecapOnOpen(id: string): void {
       const r = await generateRecap(id, opts);
       if (r) {
         if (r.recap) meta.recap = r.recap;
-        rememberRecapSource(id, meta, opts, r.source, r.source === 'grok' ? r.grokSessionId : r.codexSessionId);
+        rememberRecapSource(id, meta, opts, r.source, recapBindId(r));
         meta.recapAt = transcriptMtime(id, recapOptions(id, meta));
         if (r.title && !meta.titleLocked) meta.title = r.title; // never overwrite a hand-set name
         store.save();
@@ -883,7 +942,7 @@ async function refreshAllRecaps(): Promise<void> {
         const r = await generateRecap(id, opts);
         if (r) {
           if (r.recap) meta.recap = r.recap;
-          rememberRecapSource(id, meta, opts, r.source, r.source === 'grok' ? r.grokSessionId : r.codexSessionId);
+          rememberRecapSource(id, meta, opts, r.source, recapBindId(r));
           meta.recapAt = transcriptMtime(id, recapOptions(id, meta));
           if (r.title && !meta.titleLocked) meta.title = r.title;
           store.save();
@@ -1093,6 +1152,10 @@ function canAutoSuspendSession(session: TmuxSessionInfo): boolean {
   if (/\bgrok\b/i.test(session.command) || meta.agent === 'grok' || meta.recapAgent === 'grok' || !!meta.grokSessionId) {
     // Unbound live Grok (typed into a Claude-labelled tab) is not safely cold-resumable by PTT id.
     return !!(grokId && hasGrokSession(grokId));
+  }
+  const agyId = meta.agySessionId ?? (meta.agent === 'agy' || meta.recapAgent === 'agy' ? meta.recapSessionId : undefined);
+  if (/\bagy\b/i.test(session.command) || meta.agent === 'agy' || meta.recapAgent === 'agy' || !!meta.agySessionId) {
+    return !!(agyId && hasAgySession(agyId));
   }
   return hasPriorSession(full, meta.cwd, meta.agent ?? 'claude');
 }
@@ -1443,6 +1506,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('terminalTabs.newChatInGroup', newChatInGroup),
     vscode.commands.registerCommand('terminalTabs.newCodexChat', () => newChat('codex', NEW_GROUP)),
     vscode.commands.registerCommand('terminalTabs.newGrokChat', () => newChat('grok', NEW_GROUP)),
+    vscode.commands.registerCommand('terminalTabs.newAgyChat', () => newChat('agy', NEW_GROUP)),
     vscode.commands.registerCommand('terminalTabs.newGroup', newGroup),
     vscode.commands.registerCommand('terminalTabs.openAll', renderAll),
     vscode.commands.registerCommand('terminalTabs.openTab', openTab),

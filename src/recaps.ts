@@ -14,9 +14,10 @@ import * as path from 'path';
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 const CODEX_DIR = path.join(os.homedir(), '.codex', 'sessions');
 const GROK_DIR = path.join(os.homedir(), '.grok', 'sessions');
+const AGY_DIR = path.join(os.homedir(), '.gemini', 'antigravity-cli');
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export type RecapSource = 'claude' | 'codex' | 'grok';
+export type RecapSource = 'claude' | 'codex' | 'grok' | 'agy';
 
 export interface Recap {
   title: string;
@@ -27,6 +28,8 @@ export interface Recap {
   codexSessionId?: string;
   /** Grok's own session id, when `source === 'grok'`. */
   grokSessionId?: string;
+  /** Antigravity (`agy`) conversation id, when `source === 'agy'`. */
+  agySessionId?: string;
 }
 
 export interface RecapOptions {
@@ -42,6 +45,10 @@ export interface RecapOptions {
   preferGrok?: boolean;
   /** Grok session uuid saved after a prior exact live-process match. */
   grokSessionId?: string;
+  /** A tab running `agy` inside a legacy Claude shell must prefer Antigravity over an old Claude transcript. */
+  preferAgy?: boolean;
+  /** Antigravity conversation uuid saved after a prior exact live-process match. */
+  agySessionId?: string;
 }
 
 /** session_meta.cwd from a codex rollout's head (best-effort). The first line is session_meta but it EMBEDS the
@@ -150,17 +157,62 @@ export function grokSessionIdFromFile(file: string): string | undefined {
   return UUID_RE.test(id) ? id : undefined;
 }
 
+function agyBrainTranscript(id: string): string | undefined {
+  const base = path.join(AGY_DIR, 'brain', id, '.system_generated', 'logs');
+  for (const name of ['transcript.jsonl', 'transcript_full.jsonl']) {
+    const f = path.join(base, name);
+    try { if (fs.existsSync(f)) return f; } catch { /* missing */ }
+  }
+  return undefined;
+}
+
+/** Locate an Antigravity (`agy`) conversation. First-class tabs may share the PTT uuid; chats started by typing
+ *  `agy` in an older Claude-labelled shell have their own uuid (pass as `knownSessionId`). Cwd fallback reads
+ *  ~/.gemini/antigravity-cli/history.jsonl workspace → conversationId. */
+export function agyTranscriptFile(id: string, cwd?: string, knownSessionId?: string): string | undefined {
+  const want = knownSessionId || id;
+  const direct = agyBrainTranscript(want);
+  if (direct) return direct;
+  if (!cwd) return undefined;
+  try {
+    const hist = fs.readFileSync(path.join(AGY_DIR, 'history.jsonl'), 'utf8');
+    let latest: string | undefined;
+    for (const ln of hist.split('\n')) {
+      if (!ln.includes(cwd)) continue;
+      try {
+        const row = JSON.parse(ln) as { workspace?: string; conversationId?: string };
+        if (row.workspace === cwd && row.conversationId && UUID_RE.test(row.conversationId)) latest = row.conversationId;
+      } catch { /* skip */ }
+    }
+    return latest ? agyBrainTranscript(latest) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function agySessionIdFromFile(file: string): string | undefined {
+  // .../brain/<uuid>/.system_generated/logs/transcript.jsonl
+  const id = path.basename(path.dirname(path.dirname(path.dirname(file))));
+  return UUID_RE.test(id) ? id : undefined;
+}
+
 function recapSourceOf(file: string): RecapSource {
   if (file.includes(`${path.sep}.codex${path.sep}sessions${path.sep}`)) return 'codex';
   if (file.includes(`${path.sep}.grok${path.sep}sessions${path.sep}`)) return 'grok';
+  if (file.includes(`${path.sep}antigravity-cli${path.sep}brain${path.sep}`)) return 'agy';
   return 'claude';
 }
 
 /** Locate a session transcript. A live Grok/Codex process inside an older Claude-labelled PTT tab is preferred
  *  so we never recap a leftover Claude jsonl (or the newest other chat in the same folder) by accident. */
 export function transcriptFile(id: string, opts: RecapOptions = {}): string | undefined {
+  const agy = () => agyTranscriptFile(id, opts.cwd, opts.agySessionId);
   const grok = () => grokTranscriptFile(id, opts.cwd, opts.grokSessionId);
   const codex = () => codexTranscriptFile(id, opts.cwd, opts.codexSessionId);
+  if (opts.preferAgy) {
+    const f = agy();
+    if (f) return f;
+  }
   if (opts.preferGrok) {
     const f = grok();
     if (f) return f;
@@ -174,6 +226,10 @@ export function transcriptFile(id: string, opts: RecapOptions = {}): string | un
   for (const d of dirs) {
     const f = path.join(PROJECTS_DIR, d, `${id}.jsonl`);
     try { if (fs.existsSync(f)) return f; } catch { /* keep scanning */ }
+  }
+  if (opts.preferAgy || opts.agySessionId) {
+    const f = agy();
+    if (f) return f;
   }
   if (opts.preferGrok || opts.grokSessionId) {
     const f = grok();
@@ -218,16 +274,21 @@ function takeTurn(raw: string, turns: string[]): void {
   const t = raw.trim();
   if (t[0] !== '{') return;
   // Skip giant tool dumps unless they carry the actual user prompt (cheap pre-filter).
-  if (t.length > 400_000 && !t.includes('<user_query>')) return;
-  let r: { type?: string; content?: unknown; message?: { content?: unknown }; payload?: { type?: string; role?: string; content?: unknown } };
+  if (t.length > 400_000 && !t.includes('<user_query>') && !t.includes('<USER_REQUEST>')) return;
+  let r: { type?: string; thinking?: unknown; content?: unknown; message?: { content?: unknown }; payload?: { type?: string; role?: string; content?: unknown } };
   try { r = JSON.parse(t); } catch { return; }
-  // Three transcript dialects share this parser: Claude (~/.claude/projects) rows are {type:'user'|'assistant',
-  // message:{content}} with 'text' blocks; Codex rollouts (~/.codex/sessions) are {type:'response_item',
-  // payload:{type:'message', role, content}} with 'input_text'/'output_text' blocks; Grok chat_history.jsonl
-  // is {type:'user'|'assistant', content} with optional <user_query> wrapping.
+  // Dialects: Claude {type:'user'|'assistant', message.content}; Codex {type:'response_item', payload.message};
+  // Grok {type:'user'|'assistant', content} with <user_query>; Antigravity brain transcript.jsonl
+  // {type:'USER_INPUT'|'PLANNER_RESPONSE', content/thinking} with <USER_REQUEST>.
   let who: 'user' | 'assistant' | undefined;
   let c: unknown;
-  if (r.type === 'user' || r.type === 'assistant') {
+  if (r.type === 'USER_INPUT') {
+    who = 'user';
+    c = r.content;
+  } else if (r.type === 'PLANNER_RESPONSE') {
+    who = 'assistant';
+    c = r.thinking ?? r.content;
+  } else if (r.type === 'user' || r.type === 'assistant') {
     who = r.type;
     c = r.message?.content ?? r.content;
   } else if (r.type === 'response_item' && r.payload?.type === 'message' && (r.payload.role === 'user' || r.payload.role === 'assistant')) {
@@ -244,6 +305,8 @@ function takeTurn(raw: string, turns: string[]): void {
       .join(' ');
   }
   txt = txt.replace(/\s+/g, ' ').trim();
+  const request = txt.match(/<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/i);
+  if (request) txt = request[1].replace(/\s+/g, ' ').trim();
   const query = txt.match(/<user_query>\s*([\s\S]*?)\s*<\/user_query>/i);
   if (query) txt = query[1].replace(/\s+/g, ' ').trim();
   if (!txt || txt.startsWith('<') || txt.startsWith('Caveat:')) return;
@@ -274,6 +337,36 @@ function grokSummaryFallback(file: string | undefined): Recap | null {
   }
 }
 
+function agySummaryFallback(file: string | undefined): Recap | null {
+  if (!file || recapSourceOf(file) !== 'agy') return null;
+  const sessionId = agySessionIdFromFile(file);
+  try {
+    const hist = fs.readFileSync(path.join(AGY_DIR, 'history.jsonl'), 'utf8');
+    const prompts: string[] = [];
+    for (const ln of hist.split('\n')) {
+      if (!ln.trim()) continue;
+      try {
+        const row = JSON.parse(ln) as { display?: string; conversationId?: string; type?: string };
+        if (sessionId && row.conversationId !== sessionId) continue;
+        if (row.type === 'slash_command') continue;
+        const d = String(row.display ?? '').replace(/\s+/g, ' ').trim();
+        if (d) prompts.push(d);
+      } catch { /* skip */ }
+    }
+    const last = prompts[prompts.length - 1] ?? '';
+    const first = prompts[0] ?? last;
+    const title = first.slice(0, 70);
+    const recap = last.slice(0, 500);
+    return title || recap ? { title, recap, source: 'agy', agySessionId: sessionId } : null;
+  } catch {
+    return null;
+  }
+}
+
+function summaryFallback(file: string | undefined): Recap | null {
+  return grokSummaryFallback(file) ?? agySummaryFallback(file);
+}
+
 const STRIP_ARGS = [
   '-p', '--output-format', 'json',
   '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
@@ -291,18 +384,18 @@ export function generateRecap(id: string, opts: RecapOptions = {}): Promise<Reca
     const file = transcriptFile(id, opts);
     if (!file) { resolve(null); return; }
     const convo = condense(file);
-    if (!convo) { resolve(grokSummaryFallback(file)); return; }
+    if (!convo) { resolve(summaryFallback(file)); return; }
     const input = `${PROMPT}\n\nCONVERSATION:\n${convo}`;
     let done = false;
     const finish = (r: Recap | null) => { if (!done) { done = true; resolve(r); } };
     let child: cp.ChildProcess;
     try {
       child = cp.execFile('claude', ['--model', model, ...STRIP_ARGS], { timeout: 90000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
-        if (err) { finish(grokSummaryFallback(file)); return; }
+        if (err) { finish(summaryFallback(file)); return; }
         try {
           const result = String((JSON.parse(stdout) as { result?: unknown }).result ?? '');
           const m = result.match(/\{[\s\S]*\}/); // tolerate a ```json fence or stray prose around the object
-          if (!m) { finish(null); return; }
+          if (!m) { finish(summaryFallback(file)); return; }
           const obj = JSON.parse(m[0]) as { title?: unknown; recap?: unknown };
           const title = String(obj.title ?? '').trim().slice(0, 70);
           const recap = String(obj.recap ?? '').trim().slice(0, 500);
@@ -311,10 +404,11 @@ export function generateRecap(id: string, opts: RecapOptions = {}): Promise<Reca
             title, recap, source,
             codexSessionId: source === 'codex' ? codexSessionId(file) : undefined,
             grokSessionId: source === 'grok' ? grokSessionIdFromFile(file) : undefined,
-          } : grokSummaryFallback(file));
-        } catch { finish(grokSummaryFallback(file)); }
+            agySessionId: source === 'agy' ? agySessionIdFromFile(file) : undefined,
+          } : summaryFallback(file));
+        } catch { finish(summaryFallback(file)); }
       });
-    } catch { finish(null); return; }
+    } catch { finish(summaryFallback(file)); return; }
     try { child.stdin?.end(input); } catch { finish(null); }
   });
 }
