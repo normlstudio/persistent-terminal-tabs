@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.3
+
+- Name + recap generation falls back from Claude Haiku to Codex, then Grok, using existing CLI logins
+- Bounded, restricted background calls and sanitized provider failure messages replace silent authentication failures
+- Keeps the original transcript identity and manually set names when another CLI generates the recap
+
 ## 1.1.1
 
 - Panel row description (and native tab prefix) shows the agent — Claude, Codex, Grok, Gemini — instead of the folder name

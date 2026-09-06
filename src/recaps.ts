@@ -1,14 +1,12 @@
-import * as cp from 'child_process';
+import { generateWithFallback, ProviderOptions, RecapProvider } from './recap-providers';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
 /*
- * Recap engine. For a chat, read its transcript and ask a cheap, context-STRIPPED `claude -p` (Haiku) for a
- * short {title, recap}. "Stripped" = no MCP, no setting-sources, no tools — that keeps the cached default system
- * prompt (cheap to read) but drops the ~$0.05 harness overhead; a real call lands ~$0.02. We DON'T pass a custom
- * --system-prompt (that busts the shared cache and costs MORE). The title feeds the tab name; the recap is the
- * searchable summary. Generation is on-demand (manual ✨ button / explicit bulk) — never a silent background loop.
+ * Recap engine: condense the original chat, then use Claude Haiku → Codex → Grok.
+ * Generation is shared by manual naming and recap-on-open. Provider failover never
+ * changes the transcript identity or the caller's protection for manually named tabs.
  */
 
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
@@ -20,6 +18,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export type RecapSource = 'claude' | 'codex' | 'grok' | 'agy';
 
 export interface Recap {
+  /** CLI that generated the text; separate from the conversation source. */
+  provider?: RecapProvider;
   title: string;
   recap: string;
   /** Which transcript supplied this result — persisted by the caller to prevent later ambiguity. */
@@ -32,8 +32,7 @@ export interface Recap {
   agySessionId?: string;
 }
 
-export interface RecapOptions {
-  model?: string;
+export interface RecapOptions extends ProviderOptions {
   /** Needed for the final best-effort Codex/Grok cwd fallback. */
   cwd?: string;
   /** A tab running Codex inside a legacy Claude shell must prefer Codex over an old Claude transcript with the
@@ -367,48 +366,19 @@ function summaryFallback(file: string | undefined): Recap | null {
   return grokSummaryFallback(file) ?? agySummaryFallback(file);
 }
 
-const STRIP_ARGS = [
-  '-p', '--output-format', 'json',
-  '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
-  '--setting-sources', '', '--allowedTools', '',
-];
-
-/**
- * Generate {title, recap} for a chat via the stripped Haiku call. Async; resolves null on any failure (no
- * transcript, empty convo, CLI error, unparseable output) — recaps are best-effort and must never throw.
- * `cwd` is the tab's folder — it powers the codex fallback lookup (unpinned codex ids match by cwd, not id).
- */
-export function generateRecap(id: string, opts: RecapOptions = {}): Promise<Recap | null> {
-  const model = opts?.model ?? 'claude-haiku-4-5';
-  return new Promise((resolve) => {
-    const file = transcriptFile(id, opts);
-    if (!file) { resolve(null); return; }
-    const convo = condense(file);
-    if (!convo) { resolve(summaryFallback(file)); return; }
-    const input = `${PROMPT}\n\nCONVERSATION:\n${convo}`;
-    let done = false;
-    const finish = (r: Recap | null) => { if (!done) { done = true; resolve(r); } };
-    let child: cp.ChildProcess;
-    try {
-      child = cp.execFile('claude', ['--model', model, ...STRIP_ARGS], { timeout: 90000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
-        if (err) { finish(summaryFallback(file)); return; }
-        try {
-          const result = String((JSON.parse(stdout) as { result?: unknown }).result ?? '');
-          const m = result.match(/\{[\s\S]*\}/); // tolerate a ```json fence or stray prose around the object
-          if (!m) { finish(summaryFallback(file)); return; }
-          const obj = JSON.parse(m[0]) as { title?: unknown; recap?: unknown };
-          const title = String(obj.title ?? '').trim().slice(0, 70);
-          const recap = String(obj.recap ?? '').trim().slice(0, 500);
-          const source = recapSourceOf(file);
-          finish(title || recap ? {
-            title, recap, source,
-            codexSessionId: source === 'codex' ? codexSessionId(file) : undefined,
-            grokSessionId: source === 'grok' ? grokSessionIdFromFile(file) : undefined,
-            agySessionId: source === 'agy' ? agySessionIdFromFile(file) : undefined,
-          } : summaryFallback(file));
-        } catch { finish(summaryFallback(file)); }
-      });
-    } catch { finish(summaryFallback(file)); return; }
-    try { child.stdin?.end(input); } catch { finish(null); }
-  });
+/** Read the original conversation once, then try Claude → Codex → Grok without rebinding its source. */
+export async function generateRecap(id: string, opts: RecapOptions = {}): Promise<Recap | null> {
+  const file = transcriptFile(id, opts);
+  if (!file) { opts.onDiagnostic?.('No transcript found for this chat'); return null; }
+  const convo = condense(file);
+  if (!convo) { opts.onDiagnostic?.('Transcript has no conversation text yet'); return summaryFallback(file); }
+  const result = await generateWithFallback(`${PROMPT}\n\nCONVERSATION:\n${convo}`, opts);
+  if (!result) return summaryFallback(file);
+  const source = recapSourceOf(file);
+  return {
+    ...result, source,
+    codexSessionId: source === 'codex' ? codexSessionId(file) : undefined,
+    grokSessionId: source === 'grok' ? grokSessionIdFromFile(file) : undefined,
+    agySessionId: source === 'agy' ? agySessionIdFromFile(file) : undefined,
+  };
 }

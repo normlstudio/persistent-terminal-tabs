@@ -9,7 +9,7 @@ Group chats, keep them alive across reloads, drop the ones you are done with, an
 - **Grouped tabs** in a sidebar panel. Drag to reorder or move between groups.
 - **Crash persistence** via tmux on macOS/Linux. Reload reattaches the live process. A reboot cold-resumes from the transcript.
 - **Claude, Codex, Grok, and Antigravity.** New Chat / New Codex Chat / New Grok Chat / New Antigravity Chat. Recap and resume work for all four, including a Grok, Codex, or `agy` process typed into an older Claude-labelled tab.
-- **✨ Regenerate Name + Recap.** Reads the chat transcript and writes a short title plus a searchable summary. Manual rename is never overwritten.
+- **✨ Regenerate Name + Recap.** Reads the chat transcript and writes a short title plus a searchable summary. Tries Claude Haiku first, then Codex (`gpt-5.4-mini`), then Grok if a login expires, a CLI is missing, or a call fails. Uses each CLI’s existing login. Manual rename is never overwritten.
 - **Search recaps** across current tabs and dropped-chat history.
 - **Suspend** one chat or every closed chat to free RAM. Click the grey row to resume.
 
@@ -67,6 +67,7 @@ See **Persistent Terminal Tabs** in VS Code settings. The important ones:
 ```bash
 npm install
 npm run compile
+npm test
 ```
 
 Then **Run and Debug → Run Terminal Tabs** (F5) to open an Extension Development Host.

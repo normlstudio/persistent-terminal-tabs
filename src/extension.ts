@@ -859,6 +859,14 @@ function rememberRecapSource(id: string, meta: SessionMeta, opts: RecapOptions, 
  * Recap a single chat on demand (the ✨ button): ask Haiku for a fresh {title, recap} from its transcript, store
  * the recap, and set the title UNLESS the user has manually renamed it (titleLocked). Best-effort + progress UI.
  */
+function recapGenerationOptions(opts: RecapOptions, report = log): RecapOptions {
+  return {
+    ...opts,
+    commands: { claude: cfg('claudeCommand', 'claude'), codex: cfg('codexCommand', 'codex'), grok: cfg('grokCommand', 'grok') },
+    onDiagnostic: (message) => { log(`✨ ${message}`); if (report !== log) report(message); },
+  };
+}
+
 async function regenerateChat(node?: Node): Promise<void> {
   if (!node || node.kind !== 'tab') return;
   const meta = store.meta(node.id);
@@ -867,9 +875,10 @@ async function regenerateChat(node?: Node): Promise<void> {
     { location: vscode.ProgressLocation.Notification, title: `✨ Recapping “${meta.title}”…` },
     async () => {
       const opts = recapOptions(node.id, meta);
-      const r = await generateRecap(node.id, opts);
+      const failures: string[] = [];
+      const r = await generateRecap(node.id, recapGenerationOptions(opts, (message) => failures.push(message)));
       if (!r) {
-        vscode.window.showWarningMessage('Could not recap this chat — no Claude, Codex, Grok, or Antigravity transcript yet, or the call failed.');
+        vscode.window.showWarningMessage(`Could not generate name + recap. ${failures.join('; ')}. Sign in to an available CLI and try again.`);
         return;
       }
       if (r.recap) meta.recap = r.recap;
@@ -904,7 +913,7 @@ function autoRecapOnOpen(id: string): void {
   autoRecapping.add(id);
   void (async () => {
     try {
-      const r = await generateRecap(id, opts);
+      const r = await generateRecap(id, recapGenerationOptions(opts));
       if (r) {
         if (r.recap) meta.recap = r.recap;
         rememberRecapSource(id, meta, opts, r.source, recapBindId(r));
@@ -939,7 +948,7 @@ async function refreshAllRecaps(): Promise<void> {
         if (!meta) continue;
         prog.report({ message: `${++done}/${stale.length} · ${meta.title}`, increment: 100 / stale.length });
         const opts = recapOptions(id, meta);
-        const r = await generateRecap(id, opts);
+        const r = await generateRecap(id, recapGenerationOptions(opts));
         if (r) {
           if (r.recap) meta.recap = r.recap;
           rememberRecapSource(id, meta, opts, r.source, recapBindId(r));
