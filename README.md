@@ -17,9 +17,12 @@ Status dots:
 
 | Dot | Meaning |
 |-----|---------|
-| 🟢 | Open in this window |
+| 🔵 | Working right now — the agent is streaming, thinking, or running a tool |
+| 🟢 | Open in this window, idle |
 | 🟡 | Running in the background — click to reattach |
 | ⚪ | Suspended — click to resume from transcript |
+
+🔵 also lights up for background (🟡) chats that are still working, and covers Claude, Codex, Grok, and Antigravity. Turn it off with `terminalTabs.showWorkingDot`; tune responsiveness with `terminalTabs.workingPollSeconds` / `workingHoldSeconds`.
 
 ## Requirements
 

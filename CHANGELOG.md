@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.0
+
+- New 🔵 **working** dot: a chat shows blue while its agent is actively producing output — streaming a reply, thinking, or running a tool — as distinct from 🟢 attached-but-idle and 🟡 detached. Detected by diffing the chat's visible terminal between polls (the on-screen "esc to interrupt" line changes every 1-2s while busy; tmux's own activity clock, it turns out, sits stale for minutes while a modern agent TUI works). Lights up for background (detached) chats too, and works for Claude, Codex, Grok, and Antigravity alike; a ⚪ suspended tab is never blue.
+- Dot polling is now `terminalTabs.workingPollSeconds` (default 8s, was a fixed 15s), so 🟡/⚪ transitions are more responsive too. New knobs: `terminalTabs.showWorkingDot` (off = old three-state dot), `terminalTabs.workingHoldSeconds` (blue linger across quiet gaps, default 20s).
+- **Diagnose Dots** and the status-bar tooltip now report the 🔵 working count.
+
 ## 1.1.3
 
 - Name + recap generation falls back from Claude Haiku to Codex, then Grok, using existing CLI logins

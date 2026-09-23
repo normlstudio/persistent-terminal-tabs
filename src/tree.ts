@@ -69,6 +69,9 @@ export class TabsTree
     private readonly onArrange: (a: Arrange) => void,
     // tmux session alive for this id but NOT attached here? -> the 🟡 detached state (running in the background)
     private readonly sessionAlive: (id: string) => boolean = () => false,
+    // session produced pane output within the last poll+hold window -> the 🔵 working state (agent streaming /
+    // thinking / running a tool). Overrides 🟢/🟡; implies a live process, so it can't apply to a ⚪ tab.
+    private readonly isWorking: (id: string) => boolean = () => false,
   ) {}
 
   private activeGroup: string | undefined;
@@ -117,11 +120,14 @@ export class TabsTree
     item.id = `tab:${node.id}`;
     item.description = agentDisplayName(meta);
     item.contextValue = 'tab';
-    // Tri-state dot: 🟢 Open (attached + running) · 🟡 Detached (tmux running in background, click to reattach) ·
-    // ⚪ Suspended (no tmux — a pointer; click to cold-resume from transcript).
+    // Four-state dot: 🔵 Working (producing output right now — beats 🟢/🟡) · 🟢 Open (attached, idle) ·
+    // 🟡 Detached (tmux running in background, click to reattach) · ⚪ Suspended (no tmux — a pointer; click to
+    // cold-resume from transcript).
     const open = this.isOpen(node.id);
     const detached = !open && this.sessionAlive(node.id);
-    const state = open ? '🟢 Open — attached & running'
+    const working = (open || detached) && this.isWorking(node.id);
+    const state = working ? '🔵 Working — producing output right now'
+      : open ? '🟢 Open — attached & idle'
       : detached ? '🟡 Detached — running in background; click to reattach'
       : '⚪ Suspended — no process; click to resume from transcript';
     // Tooltip: state, then the AI recap (the searchable summary), then the folder. Press ✨ to (re)generate the recap.
@@ -131,8 +137,11 @@ export class TabsTree
     if (meta?.cwd) tip.appendMarkdown(`\`${meta.cwd}\``);
     item.tooltip = tip;
     item.iconPath = new vscode.ThemeIcon(
-      open || detached ? 'circle-filled' : 'circle-outline', // filled = a process is running (green attached / yellow detached)
-      open ? new vscode.ThemeColor('charts.green') : detached ? new vscode.ThemeColor('charts.yellow') : undefined,
+      open || detached ? 'circle-filled' : 'circle-outline', // filled = a process is running (blue working / green idle / yellow detached)
+      working ? new vscode.ThemeColor('charts.blue')
+        : open ? new vscode.ThemeColor('charts.green')
+        : detached ? new vscode.ThemeColor('charts.yellow')
+        : undefined,
     );
     // single click opens / focuses the terminal
     item.command = { command: 'terminalTabs.openTab', title: 'Open', arguments: [node] };

@@ -425,6 +425,28 @@ export function listSessions(): TmuxSessionInfo[] {
 }
 
 /**
+ * The text currently VISIBLE in a session's active pane. Powers the 🔵 working dot: modern agent TUIs (Claude
+ * Code, Codex, Grok) batch their redraws, so tmux's own #{session_activity} clock can sit minutes stale while
+ * one is visibly working — but the on-screen "· Ns · esc to interrupt" line is right there, and its timer
+ * ticks every ~1-2s. So the caller looks for that busy marker AND diffs the capture between polls. Works on a
+ * DETACHED session too (tmux keeps the pane buffer server-side). One cheap tmux call; best-effort, never throws.
+ */
+export function capturePane(id: string): string | undefined {
+  const tmux = tmuxPath();
+  if (!tmux) return undefined;
+  try {
+    // No -S/-E: just the visible screen (bounded by pane height), where the live status line sits.
+    return cp.execFileSync(
+      tmux,
+      [...socketArgs(), 'capture-pane', '-p', '-t', sessionName(id)],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 },
+    );
+  } catch {
+    return undefined; // session gone, or tmux busy — treat as "no change"
+  }
+}
+
+/**
  * Return the exact Codex rollout currently open by a PTT tmux session, when one can be observed. A legacy PTT tab
  * may be labelled/launchable as Claude while Max has typed `codex` into its shell, so its PTT id is unrelated to
  * Codex's rollout uuid. Codex keeps its active JSONL open; following the pane's process tree and inspecting those

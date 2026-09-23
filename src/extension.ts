@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { StateStore, StateData, NEW_GROUP, SessionMeta, AgentKind, workspaceSlug, rememberCodexLink, rememberGrokLink, rememberAgyLink, agentDisplayName } from './state';
 import { TabsTree, Node, Arrange } from './tree';
-import { tmuxAvailable, tmuxLaunch, killSession, hasTranscript, hasCodexSession, hasGrokSession, hasAgySession, AgentSpec, applyTmuxConf, listSessions, TmuxSessionInfo, tmuxDiag, liveCodexTranscript, liveGrokTranscript, liveAgyTranscript } from './tmux';
+import { tmuxAvailable, tmuxLaunch, killSession, hasTranscript, hasCodexSession, hasGrokSession, hasAgySession, AgentSpec, applyTmuxConf, listSessions, TmuxSessionInfo, tmuxDiag, liveCodexTranscript, liveGrokTranscript, liveAgyTranscript, capturePane } from './tmux';
 import { friendlyProject, discoverSessions, transcriptCwd, transcriptCwds } from './sessions';
 import { recordHistory, readHistory, historyPath, HistoryEvent } from './history';
 import { generateRecap, Recap, RecapOptions, RecapSource, transcriptMtime, grokSessionIdFromFile, agySessionIdFromFile } from './recaps';
@@ -54,15 +54,17 @@ function diag(line: string): void {
  * this instant (a reset we haven't accounted for) despite the activate snapshot. Never throws.
  */
 function diagDots(when: string): void {
-  let open = 0, detached = 0, suspended = 0;
+  let open = 0, detached = 0, suspended = 0, working = 0;
   const ex: string[] = [];
   for (const id of store.allIds()) {
     const o = isOpen(id);
     const d = !o && sessionAliveCached(id);
+    const w = (o || d) && isWorkingCached(id);
+    if (w) working++;
     if (o) open++; else if (d) detached++; else suspended++;
-    if (ex.length < 8) ex.push(`${id.slice(0, 8)}:${o ? 'O' : d ? 'D' : 'S'}`);
+    if (ex.length < 8) ex.push(`${id.slice(0, 8)}:${w ? 'W' : o ? 'O' : d ? 'D' : 'S'}`);
   }
-  diag(`dots@${when} aliveIds=${aliveIds.size} liveTerms=${liveTerminals.size} saved=${store.allIds().length} → open=${open} detached=${detached} suspended=${suspended} | ${ex.join(' ')}`);
+  diag(`dots@${when} aliveIds=${aliveIds.size} working=${working} liveTerms=${liveTerminals.size} saved=${store.allIds().length} → open=${open} detached=${detached} suspended=${suspended} | ${ex.join(' ')}`);
   // DEEP DUMP: the actual in-memory string values, so an id-format mismatch between the cache and the saved ids
   // (which is logically impossible from the code, yet the counts say it's happening) is exposed verbatim. Prints
   // what aliveIds holds, what a FRESH listSessions returns, the first saved id + its slice, and a direct has().
@@ -81,7 +83,8 @@ function updateStatus(): void {
   const here = new Set([...liveTerminals.values()].map((id) => id.slice(0, 8)));
   const openHere = [...here].filter((id) => aliveIds.has(id)).length;
   statusItem.text = `$(terminal) ${total}`;
-  statusItem.tooltip = `Persistent Terminal Tabs — ${total} live tmux session(s); ${openHere} open in this window.\nClick for the full session + RAM breakdown.`;
+  const working = workingSet.size;
+  statusItem.tooltip = `Persistent Terminal Tabs — ${total} live tmux session(s); ${openHere} open in this window${working ? `; ${working} 🔵 working` : ''}.\nClick for the full session + RAM breakdown.`;
   statusItem.show();
 }
 function cfg<T>(key: string, dflt: T): T {
@@ -144,14 +147,108 @@ function pruneDeadTerminals(): void {
 /** 8-char ids of every LIVE tmux session (cached from one listSessions pass). Powers the 🟡 detached dot: a saved
  *  tab whose session is alive but isn't open here. Refreshed after actions + on a timer. */
 let aliveIds = new Set<string>();
-/** Re-read the live tmux set; returns whether it CHANGED (so the timer only re-renders when a dot would change). */
+
+/**
+ * 🔵 WORKING-DOT state. tmux's own #{session_activity} clock is NOT usable here — measured, it sat 100+ s stale
+ * while a Claude/Codex TUI was visibly working, because those TUIs batch their redraws. Two signals off the
+ * VISIBLE PANE instead, per poll:
+ *   1. a "busy marker" on screen — the `esc to interrupt` line every agent (Claude / Codex / Grok) shows while
+ *      a turn runs, or its truncated `(2m 46s ·` elapsed-timer head. Instant, no baseline needed.
+ *   2. the pane text (whitespace-normalised, non-blank) changed since last poll — catches a narrow pane that
+ *      truncated the marker away, or a plain build streaming in a shell.
+ * Either fires -> stamp `lastBusyMs`; the dot then stays blue for `workingHoldSeconds` to bridge quiet gaps
+ * (a long silent tool call, a between-turns pause) so it doesn't flap.
+ */
+const paneHash = new Map<string, string>();   // 8-char id -> last normalised pane hash (for signal 2)
+const lastBusyMs = new Map<string, number>(); // 8-char id -> epoch-ms we last saw this session busy
+let workingSet = new Set<string>();            // snapshot the tree renders from (cheap, like sessionAliveCached)
+
+const BUSY_MARKER = /esc to interrupt|\besc to interr|\(\d+m ?\d*s? ?[·•]|\bworking\b.{0,20}\binterrupt/i;
+
+/** 🔵 knobs, re-read live so a Settings change needs no reload. `showWorkingDot:false` => nothing is ever blue. */
+function workingCfg(): { on: boolean; pollMs: number; holdMs: number } {
+  return {
+    on: cfg('showWorkingDot', true),
+    pollMs: Math.min(60, Math.max(3, cfg('workingPollSeconds', 8))) * 1000,
+    holdMs: Math.min(300, Math.max(5, cfg('workingHoldSeconds', 20))) * 1000,
+  };
+}
+
+/** Tiny, fast string hash (djb2) — we only need "did this text change", not cryptographic strength. */
+function quickHash(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return String(h >>> 0);
+}
+
+/** For each live session, look at its visible pane and stamp `lastBusyMs` if it reads as busy (see the block
+ *  comment above). One cheap `capture-pane` per live session — bounded by tmux session count, not saved tabs.
+ *  Skipped entirely when the feature is off. */
+function refreshWorking(live: Set<string>): void {
+  const { on } = workingCfg();
+  for (const id of [...paneHash.keys()]) if (!live.has(id)) { paneHash.delete(id); lastBusyMs.delete(id); }
+  if (!on) return;
+  const now = Date.now();
+  for (const id of live) {
+    const screen = capturePane(id);
+    if (screen === undefined) continue; // session vanished mid-poll — leave its last state to expire via holdMs
+    const norm = screen.replace(/[ \t]+$/gm, '').replace(/\n{2,}/g, '\n').trim();
+    const h = norm ? quickHash(norm) : '';
+    const prev = paneHash.get(id);
+    paneHash.set(id, h);
+    const changed = prev !== undefined && norm !== '' && prev !== h; // a fresh baseline is not "working" yet
+    if (BUSY_MARKER.test(screen) || changed) lastBusyMs.set(id, now);
+  }
+}
+
+/** 8-char ids that should RENDER BLUE right now: a live session last seen busy within the last workingHoldSeconds. */
+function workingIds(): Set<string> {
+  const { on, holdMs } = workingCfg();
+  const out = new Set<string>();
+  if (!on) return out;
+  const now = Date.now();
+  for (const id of aliveIds) {
+    const at = lastBusyMs.get(id);
+    if (at !== undefined && now - at < holdMs) out.add(id);
+  }
+  return out;
+}
+
+/** Is this chat's session actively working (🔵)? Reads the cache, keyed by 8-char id (mirrors sessionAliveCached). */
+function isWorkingCached(id: string): boolean {
+  return workingSet.has(id.slice(0, 8));
+}
+
+/** Re-read the live tmux set AND the 🔵 working set; returns whether a DOT would change (alive set, or working
+ *  set — which also moves on its own as blue lingers expire) so the timer only re-renders when it matters. */
 function refreshAlive(): boolean {
   let next: Set<string>;
   try { next = new Set(listSessions().map((s) => s.id)); } catch { return false; }
-  const changed = next.size !== aliveIds.size || [...next].some((x) => !aliveIds.has(x));
+  const aliveChanged = next.size !== aliveIds.size || [...next].some((x) => !aliveIds.has(x));
   aliveIds = next;
+
+  refreshWorking(next);
+  const nextWorking = workingIds();
+  const workingChanged =
+    nextWorking.size !== workingSet.size || [...nextWorking].some((x) => !workingSet.has(x));
+  workingSet = nextWorking;
+
   updateStatus(); // keep the status-bar counter honest on every poll
-  return changed;
+  return aliveChanged || workingChanged;
+}
+
+/** User just interacted with the panel (clicked a tab/group, hit Refresh) — recompute the dots NOW instead of
+ *  waiting up to `workingPollSeconds` for the next poll. Deferred a tick so the click itself stays snappy; the
+ *  tmux sweep (one small capture-pane per live session) then runs and re-renders. */
+let pokePending = false;
+function pokeDots(): void {
+  if (pokePending) return;
+  pokePending = true;
+  setTimeout(() => {
+    pokePending = false;
+    refreshAlive();
+    tree?.refresh(); // unconditional: the click's own render may have raced this sweep
+  }, 0);
 }
 
 /** UUID from a Codex rollout path, if this is one of Codex's active JSONL files. */
@@ -622,6 +719,7 @@ function applyTabMove(movedIds: string[]): void {
 
 function openTab(node: Node): void {
   if (!node || node.kind !== 'tab') return;
+  pokeDots(); // clicking a tab -> refresh the 🔵/🟡/⚪ dots now, don't wait for the poll
   pruneDeadTerminals(); // so terminalFor/isOpen/laterOpen/anchorFor below see the real live set, not stale entries
   if (terminalFor(node.id)) { terminalFor(node.id)!.show(); return; }
   // Keep the native split order == panel order. VS Code can only APPEND a split, so a plain append is correct
@@ -693,6 +791,7 @@ async function renderGroup(name: string, force = false): Promise<void> {
 
 /** Click a group row: render that group as one grouped split-tab (gentle — focuses if it already reads combined). */
 function openGroup(node?: Node): void {
+  pokeDots(); // clicking a group -> refresh its chats' dots now, don't wait for the poll
   const name = node?.kind === 'group' ? node.name : currentGroup();
   void renderGroup(name);
 }
@@ -1388,7 +1487,7 @@ export function activate(context: vscode.ExtensionContext): void {
       applyTabMove(a.movedIds); // surgical: touch only the moved pane(s) + the target's tail (R3/R4)
     }
     tree.refresh();
-  }, sessionAliveCached);
+  }, sessionAliveCached, isWorkingCached);
   view = vscode.window.createTreeView<Node>('terminalTabs.tree', {
     treeDataProvider: tree,
     dragAndDropController: tree,
@@ -1459,7 +1558,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('terminalTabs.refreshAllRecaps', refreshAllRecaps),
     vscode.commands.registerCommand('terminalTabs.searchRecaps', searchRecaps),
     vscode.commands.registerCommand('terminalTabs.importCockpit', importFromCockpit),
-    vscode.commands.registerCommand('terminalTabs.refresh', () => tree.refresh()),
+    vscode.commands.registerCommand('terminalTabs.refresh', () => { pokeDots(); tree.refresh(); }),
     vscode.commands.registerCommand('terminalTabs.showHistory', showHistory),
     vscode.commands.registerCommand('terminalTabs.showSessions', showSessions),
     vscode.commands.registerCommand('terminalTabs.cleanOrphans', cleanOrphans),
@@ -1473,10 +1572,15 @@ export function activate(context: vscode.ExtensionContext): void {
       const changed = refreshAlive();
       tree?.refresh();
       diagDots('manual');
-      let open = 0, detached = 0, suspended = 0;
-      for (const id of store.allIds()) { const o = isOpen(id); if (o) open++; else if (sessionAliveCached(id)) detached++; else suspended++; }
+      let open = 0, detached = 0, suspended = 0, working = 0;
+      for (const id of store.allIds()) {
+        const o = isOpen(id);
+        const d = !o && sessionAliveCached(id);
+        if ((o || d) && isWorkingCached(id)) working++;
+        if (o) open++; else if (d) detached++; else suspended++;
+      }
       vscode.window.showInformationMessage(
-        `Dots: 🟢 ${open} open · 🟡 ${detached} detached · ⚪ ${suspended} suspended (of ${store.allIds().length}). Live tmux: ${aliveIds.size}. Forced a refresh${changed ? ' (live set changed)' : ''}. Logged to ~/.terminal-tabs/diag.log.`,
+        `Dots: 🔵 ${working} working · 🟢 ${open} open · 🟡 ${detached} detached · ⚪ ${suspended} suspended (of ${store.allIds().length}). Live tmux: ${aliveIds.size}. Forced a refresh${changed ? ' (a dot changed)' : ''}. Logged to ~/.terminal-tabs/diag.log.`,
       );
     }),
   );
@@ -1512,12 +1616,14 @@ export function activate(context: vscode.ExtensionContext): void {
     suspendStrayOnStartup();
     const timer = setInterval(autoSuspendSweep, 30 * 60 * 1000);
     context.subscriptions.push({ dispose: () => clearInterval(timer) });
-    // Keep the 🟡/⚪ dots honest for changes we don't drive (a session dying on its own, another window
-    // attaching/detaching): re-poll the live set every 15s and re-render only if it actually changed.
+    // Keep the dots honest for changes we don't drive (a session dying on its own, another window attaching, and
+    // — the 🔵 working dot — an agent starting or finishing a turn): re-poll on the `workingPollSeconds` cadence
+    // (default 8s; was a hardcoded 15s) and re-render only when a dot would actually change. refreshAlive() now
+    // also reports a change when only the working set moved.
     const dotTimer = setInterval(() => {
       const bound = bindLiveForeignSessions();
       if (refreshAlive() || bound) tree?.refresh();
-    }, 15000);
+    }, Math.min(60, Math.max(3, cfg('workingPollSeconds', 8))) * 1000);
     context.subscriptions.push({ dispose: () => clearInterval(dotTimer) });
     // STARTUP CATCH-UP. The activate-time tmux query can come back EMPTY (the server isn't reachable from the
     // just-launched extension host yet), which renders every live session ⚪ instead of 🟡 and makes the idle
