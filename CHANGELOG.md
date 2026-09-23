@@ -6,6 +6,13 @@
 - Bounded, restricted background calls and sanitized provider failure messages replace silent authentication failures
 - Keeps the original transcript identity and manually set names when another CLI generates the recap
 
+## 1.1.2
+
+- Regenerate Name + Recap now produces entity-first titles (lead, client, company, project, site, or repo) and concrete latest-state recaps instead of generic workflow labels
+- Removed the Show Group as Grid / Collapse Grid feature; groups now stay in the terminal panel split view
+- New Chat (including Codex, Grok, and Antigravity variants) now joins the selected/open group and inherits its folder; with no group context it still falls back to `📥 New`
+- Detects the conflicting internal `norml.persistent-terminal-tabs` build before registering any views or listeners, preventing split ownership that left open chats yellow
+
 ## 1.1.1
 
 - Panel row description (and native tab prefix) shows the agent — Claude, Codex, Grok, Gemini — instead of the folder name

@@ -30,7 +30,6 @@ let graceUntil = 0;
 let useTmux = false;
 let view: vscode.TreeView<Node>;
 let statusItem: vscode.StatusBarItem | undefined; // glanceable live-session count (also proves a reload loaded new code)
-let burstedGroup: string | undefined; // the group currently shown as an editor-area grid (on-demand), if any
 
 function log(msg: string): void {
   out?.appendLine(`[${new Date().toISOString().slice(11, 19)}] ${msg}`);
@@ -374,7 +373,7 @@ function resolveLaunchCwd(id: string, storedCwd: string, kind: AgentKind): { cwd
   return { cwd: os.homedir(), orphaned: true, recordedCwd: tc || storedCwd || undefined };
 }
 
-function openTerminal(id: string, meta: SessionMeta, restored: boolean, editorColumn?: number): vscode.Terminal {
+function openTerminal(id: string, meta: SessionMeta, restored: boolean): vscode.Terminal {
   const group = store.groupOf(id)?.name ?? NEW_GROUP;
   // `agent` remains the original tab recipe for compatibility, but a captured Codex/Grok session is authoritative
   // for recovery. This is what makes a legacy Claude-labelled shell reopen its real conversation after Cmd+R.
@@ -394,12 +393,8 @@ function openTerminal(id: string, meta: SessionMeta, restored: boolean, editorCo
     name: label.length > 46 ? label.slice(0, 45) + '…' : label,
     isTransient: true,
   };
-  if (editorColumn != null) {
-    opts.location = { viewColumn: editorColumn as vscode.ViewColumn }; // burst: one cell of the editor grid
-  } else {
-    const anchor = anchorFor(group);
-    if (anchor) opts.location = { parentTerminal: anchor }; // panel: split into the group's tab
-  }
+  const anchor = anchorFor(group);
+  if (anchor) opts.location = { parentTerminal: anchor }; // panel: split into the group's tab
   // Auto-resume ONLY when a transcript actually exists; otherwise open a CLEAN shell (no auto-claude) so Max can
   // cd + run claude himself. This also keeps DATA-SAFETY: we NEVER auto `--session-id` (which could overwrite a
   // transcript) — a new session is pinned only when Max types `claude` (the wrapper picks --session-id vs --resume).
@@ -435,13 +430,12 @@ function newChat(agent: AgentKind = 'claude', targetGroup?: string): void {
   pruneDeadTerminals(); // so anchorFor below finds the group's LIVE pane (a stale one would open a new tab unsplit)
   const id = randomUUID();
   const title = `${agent === 'codex' ? 'codex' : agent === 'grok' ? 'grok' : agent === 'agy' ? 'agy' : 'chat'} ${++counter}`;
-  // explicit target (the "+" on a group row, or the top "+" which pins 📥 New) wins over the selection
+  // An explicit group-row "+" wins; otherwise the selected/open group is the target. With no PTT context,
+  // currentGroup() falls back to 📥 New. This keeps the toolbar "+" beside the group Max is working in.
   const group = targetGroup ?? currentGroup();
-  // inherit the target group's folder ONLY for a real group (the group "+"), so the chat lands next to its
-  // group-mates. The inbox (📥 New) is a catch-all — the top "+" should open in the workspace root, not the
-  // inbox's mixed cwd — so don't inherit when the target is 📥 New.
-  const inherited = targetGroup && targetGroup !== NEW_GROUP ? groupCwd(group) : undefined;
-  // Top "+" (no inherit): start the clean shell in HOME — neutral, never ~/.claude. Max cd's to the right folder.
+  // A real group carries its dominant folder into the new chat, whether targeted from its inline "+" or from the
+  // toolbar while that group is selected/open. The inbox is mixed, so it deliberately starts from HOME instead.
+  const inherited = group !== NEW_GROUP ? groupCwd(group) : undefined;
   const cwd = inherited ?? os.homedir();
   const meta: SessionMeta = { title, project: 'slice', cwd, agent };
   store.add(id, meta, group);
@@ -624,83 +618,6 @@ function applyTabMove(movedIds: string[]): void {
   for (const id of relay) openTerminal(id, metaOf(id), true);
   terminalFor(openMoved[0])?.show();
   log(`⇄ moved ${openMoved.length} tab(s) → "${toGroup}" (surgical; re-laid ${relay.length} pane(s))`);
-}
-
-// ---- on-demand GRID: burst the active group's chats into a grid in the EDITOR area, then dismiss it ----
-// The panel stays the chats area; this is a momentary focus tool (keeps the clean files/chats split).
-
-/** Auto grid shape — rows of ≤3, fewest rows, top rows fuller: 3→[3] 4→[2,2] 5→[3,2] 6→[3,3] 7→[3,2,2]. */
-function gridRows(n: number): number[] {
-  const rows = Math.max(1, Math.ceil(n / 3));
-  const base = Math.floor(n / rows);
-  const extra = n % rows; // the first `extra` rows get one more column
-  return Array.from({ length: rows }, (_, r) => base + (r < extra ? 1 : 0));
-}
-
-/** Translate a row plan into a vscode.setEditorLayout argument (rows stacked top→bottom, columns inside each). */
-function buildGridLayout(rows: number[]): unknown {
-  if (rows.length === 1) {
-    return { orientation: 0, groups: Array.from({ length: rows[0] }, () => ({})) };
-  }
-  return {
-    orientation: 1,
-    groups: rows.map((cols) => ({
-      size: 1 / rows.length,
-      groups: Array.from({ length: cols }, () => ({ size: 1 / cols })),
-    })),
-  };
-}
-
-const GRID_CAP = 9; // beyond this, cells get unreadable — the overflow stays in the panel
-
-function setBursted(name: string | undefined): void {
-  burstedGroup = name;
-  vscode.commands.executeCommand('setContext', 'terminalTabs.bursted', !!name);
-}
-
-/** Move a group's chats into an editor-area grid (toggles; only one grid at a time). */
-async function burstGroup(node?: Node): Promise<void> {
-  const name = node?.kind === 'group' ? node.name : currentGroup();
-  if (burstedGroup === name) { await collapseBurst(); return; } // same group -> toggle off
-  if (burstedGroup) await collapseBurst();                      // one grid at a time
-  const grp = store.groups.find((g) => g.name === name);
-  if (!grp || grp.sessionIds.length === 0) {
-    vscode.window.showInformationMessage(`“${name}” has no chats to show as a grid.`);
-    return;
-  }
-  let ids = grp.sessionIds;
-  if (ids.length > GRID_CAP) {
-    log(`▦ grid: “${name}” has ${ids.length} chats — showing first ${GRID_CAP}, the rest stay in the panel`);
-    ids = ids.slice(0, GRID_CAP);
-  }
-  // detach this group's panel terminals (untrack first -> no drop; tmux keeps the sessions alive)
-  for (const [t, id] of [...liveTerminals]) {
-    if (ids.includes(id)) { liveTerminals.delete(t); t.dispose(); }
-  }
-  const rows = gridRows(ids.length);
-  await vscode.commands.executeCommand('vscode.setEditorLayout', buildGridLayout(rows));
-  ids.forEach((id, i) =>
-    openTerminal(id, store.meta(id) ?? { title: id.slice(0, 8), project: '', cwd: '' }, true, i + 1),
-  );
-  setBursted(name);
-  tree?.refresh();
-  log(`▦ grid: “${name}” → ${rows.join('+')} in the editor area (${ids.length} chats)`);
-}
-
-/** Collapse the editor grid back into the panel; chats return to their group tab, files reflow to one column. */
-async function collapseBurst(): Promise<void> {
-  if (!burstedGroup) return;
-  const name = burstedGroup;
-  setBursted(undefined);
-  const ids = store.groups.find((g) => g.name === name)?.sessionIds ?? [];
-  for (const [t, id] of [...liveTerminals]) {
-    if (ids.includes(id)) { liveTerminals.delete(t); t.dispose(); } // untrack first -> no drop
-  }
-  // return the editor area to a single column so files are whole again
-  await vscode.commands.executeCommand('vscode.setEditorLayout', { orientation: 0, groups: [{}] });
-  const idx = groupIndex(name);
-  rerenderFrom(idx >= 0 ? idx : 0); // rebuild from this group down so it lands in its panel position
-  log(`▢ grid collapsed: “${name}” back to the panel`);
 }
 
 function openTab(node: Node): void {
@@ -1270,7 +1187,6 @@ async function dropGroup(node: Node): Promise<void> {
     if (t) { liveTerminals.delete(t); t.dispose(); }
     if (useTmux) killSession(id);
   }
-  if (burstedGroup === node.name) setBursted(undefined); // its grid is gone with it
   for (const id of ids) hist(id, 'drop-group');
   store.dropGroup(node.name);
   store.save();
@@ -1293,7 +1209,6 @@ async function renameGroup(node: Node): Promise<void> {
   store.renameGroup(node.name, newName);
   const g = store.groups.find((x) => x.name === newName);
   if (g) g.auto = false; // user set the name explicitly -> stop auto-renaming it
-  if (burstedGroup === node.name) setBursted(newName); // keep the grid pointing at the renamed group
   store.save();
   tree?.refresh();
   log(`✎ renamed group "${node.name}" → "${newName}"`);
@@ -1400,6 +1315,23 @@ function showState(): void {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  // `norml.persistent-terminal-tabs` was an internal/archive build that used the same view + command ids as the
+  // public extension. If both are installed, the second activation throws after partially registering its tree
+  // and listeners: one copy owns the terminals while the other paints every row 🟡. Stay completely passive and
+  // point at the conflict before creating a view/listener so the UI cannot enter that split-brain state again.
+  const conflictingId = 'norml.persistent-terminal-tabs';
+  if (vscode.extensions.getExtension(conflictingId)) {
+    void vscode.window.showErrorMessage(
+      'Persistent Terminal Tabs found the conflicting internal “norml” build. Uninstall it, then run Developer: Reload Window.',
+      'Show conflicting extension',
+    ).then((choice) => {
+      if (choice === 'Show conflicting extension') {
+        void vscode.commands.executeCommand('workbench.extensions.search', `@id:${conflictingId}`);
+      }
+    });
+    return;
+  }
+
   out = vscode.window.createOutputChannel('Persistent Terminal Tabs');
   const wsKey = workspaceKey();
   store = StateStore.forWorkspace(wsKey);
@@ -1446,8 +1378,6 @@ export function activate(context: vscode.ExtensionContext): void {
   // Grace window: dispose untracked revivals (a default `zsh`) that surface right after startup.
   // Armed only in a managed window, so an unmanaged window never disposes a freshly-opened terminal.
   graceUntil = managed ? Date.now() + STARTUP_GRACE_MS : 0;
-  setBursted(undefined); // burst is an in-session focus tool; reload always starts in the panel
-
   tree = new TabsTree(store, isOpen, (a: Arrange) => {
     store.save();
     pruneDeadTerminals(); // clear stale anchors before reconciling, so splits don't fall back to new tabs
@@ -1511,11 +1441,11 @@ export function activate(context: vscode.ExtensionContext): void {
       log(`· close seen — closeToDrop on, debouncing ${ms}ms: ${id.slice(0, 8)}`);
       pendingDrops.set(id, setTimeout(() => commitDrop(id), ms));
     }),
-    vscode.commands.registerCommand('terminalTabs.newChat', () => newChat(cfg<AgentKind>('defaultAgent', 'claude'), NEW_GROUP)),
+    vscode.commands.registerCommand('terminalTabs.newChat', () => newChat(cfg<AgentKind>('defaultAgent', 'claude'))),
     vscode.commands.registerCommand('terminalTabs.newChatInGroup', newChatInGroup),
-    vscode.commands.registerCommand('terminalTabs.newCodexChat', () => newChat('codex', NEW_GROUP)),
-    vscode.commands.registerCommand('terminalTabs.newGrokChat', () => newChat('grok', NEW_GROUP)),
-    vscode.commands.registerCommand('terminalTabs.newAgyChat', () => newChat('agy', NEW_GROUP)),
+    vscode.commands.registerCommand('terminalTabs.newCodexChat', () => newChat('codex')),
+    vscode.commands.registerCommand('terminalTabs.newGrokChat', () => newChat('grok')),
+    vscode.commands.registerCommand('terminalTabs.newAgyChat', () => newChat('agy')),
     vscode.commands.registerCommand('terminalTabs.newGroup', newGroup),
     vscode.commands.registerCommand('terminalTabs.openAll', renderAll),
     vscode.commands.registerCommand('terminalTabs.openTab', openTab),
@@ -1528,8 +1458,6 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('terminalTabs.regenerateChat', regenerateChat),
     vscode.commands.registerCommand('terminalTabs.refreshAllRecaps', refreshAllRecaps),
     vscode.commands.registerCommand('terminalTabs.searchRecaps', searchRecaps),
-    vscode.commands.registerCommand('terminalTabs.burstGroup', burstGroup),
-    vscode.commands.registerCommand('terminalTabs.collapseGrid', () => collapseBurst()),
     vscode.commands.registerCommand('terminalTabs.importCockpit', importFromCockpit),
     vscode.commands.registerCommand('terminalTabs.refresh', () => tree.refresh()),
     vscode.commands.registerCommand('terminalTabs.showHistory', showHistory),

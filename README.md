@@ -45,7 +45,7 @@ Then **Developer: Reload Window**.
 ## Daily use
 
 1. Open the **Persistent Terminal Tabs** view (Activity Bar, or `Cmd+Alt+T` / `Ctrl+Alt+T`).
-2. **+** starts a new chat in `📥 New`. Type `claude`, `codex`, `grok`, or `agy` in the shell — or use **New Codex / Grok / Antigravity Chat**.
+2. **+** starts a new chat in the selected/open group and inherits that group's folder. With no PTT group in context, it falls back to `📥 New`. Type `claude`, `codex`, `grok`, or `agy` in the shell — or use **New Codex / Grok / Antigravity Chat**.
 3. Drag chats into groups. Click a group to open it as one split tab.
 4. Press ✨ on a chat to generate a name and recap.
 5. Close a tab to park it (🟡). **Drop** (trash) to remove it. **Suspend** (⏳ / 🌙) to free RAM.
