@@ -86,6 +86,32 @@ function providerArgs(provider: RecapProvider, dir: string, opts: ProviderOption
   ];
 }
 
+/**
+ * VS Code started from the Dock gets the user's PATH only when its login-shell probe finishes in time; otherwise
+ * ("Unable to resolve your shell environment in a reasonable time") the extension host runs on launchd's bare
+ * /usr/bin:/bin:/usr/sbin:/sbin. A bare `claude` is then ENOENT and every recap fails as "CLI not found" while the
+ * tmux chats keep working (their shells load the rc files). Like tmuxPath(), look past PATH into the usual install
+ * dirs. Explicit paths pass through untouched; an unresolvable name is returned as-is so ENOENT still reports it.
+ */
+export function resolveCommand(command: string, env: NodeJS.ProcessEnv = process.env): string {
+  if (!command || command.includes('/') || process.platform === 'win32') return command;
+  const home = os.homedir();
+  const dirs = [
+    ...(env.PATH ?? '').split(path.delimiter),
+    ...['.local/bin', '.grok/bin', '.bun/bin', '.npm-global/bin', '.claude/local'].map((d) => path.join(home, d)),
+    '/opt/homebrew/bin', '/usr/local/bin',
+  ];
+  for (const d of dirs) {
+    if (!d) continue;
+    const file = path.join(d, command);
+    try {
+      fs.accessSync(file, fs.constants.X_OK);
+      if (fs.statSync(file).isFile()) return file;
+    } catch { /* keep looking */ }
+  }
+  return command;
+}
+
 function runProvider(provider: RecapProvider, dir: string, input: string, opts: ProviderOptions): Promise<GeneratedRecap | null> {
   return new Promise((resolve) => {
     // A VS Code launched from a Claude terminal can inherit the nesting marker. This is a separate,
@@ -93,8 +119,11 @@ function runProvider(provider: RecapProvider, dir: string, input: string, opts: 
     const env = { ...process.env };
     delete env.CLAUDECODE;
     const report = (message: string) => { try { opts.onDiagnostic?.(`${provider}: ${message}`); } catch { /* logging is optional */ } };
+    const command = resolveCommand(opts.commands?.[provider] || provider, env);
+    // A script shim (`#!/usr/bin/env node`) needs its own bin dir on PATH when the host's PATH is bare.
+    if (path.isAbsolute(command)) env.PATH = [env.PATH, path.dirname(command)].filter(Boolean).join(path.delimiter);
     try {
-      const child = cp.execFile(opts.commands?.[provider] || provider, providerArgs(provider, dir, opts), {
+      const child = cp.execFile(command, providerArgs(provider, dir, opts), {
         cwd: dir, env, timeout: opts.timeoutMs ?? 45000, killSignal: 'SIGKILL', maxBuffer: 8 * 1024 * 1024,
       }, (err, stdout, stderr) => {
         const value = err ? null : parseProviderOutput(provider, stdout);

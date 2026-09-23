@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { generateWithFallback, parseProviderOutput } = require('../out/recap-providers');
+const { generateWithFallback, parseProviderOutput, resolveCommand } = require('../out/recap-providers');
 
 const value = { title: 'PTT naming', recap: 'Restore name generation with CLI fallback.' };
 const claude = JSON.stringify({ is_error: false, result: JSON.stringify(value) });
@@ -115,4 +115,44 @@ test('Codex can recap a Claude transcript without changing its source or session
   assert.equal(result.provider, 'codex');
   assert.equal(result.source, 'claude');
   assert.equal(result.codexSessionId, undefined);
+});
+
+test('resolves bare CLI names on PATH first, then in the usual install dirs', { skip: process.platform === 'win32' }, (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ptt-resolve-test-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const onPath = path.join(home, 'on-path');
+  const localBin = path.join(home, '.local', 'bin');
+  for (const d of [onPath, localBin]) fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(onPath, 'ptt-cli'), '', { mode: 0o700 });
+  fs.writeFileSync(path.join(localBin, 'ptt-cli'), '', { mode: 0o700 });
+  fs.writeFileSync(path.join(localBin, 'ptt-local-cli'), '', { mode: 0o700 });
+  fs.writeFileSync(path.join(localBin, 'ptt-not-executable'), '', { mode: 0o600 });
+  const original = os.homedir;
+  os.homedir = () => home;
+  t.after(() => { os.homedir = original; });
+  const env = { PATH: ['/usr/bin', onPath].join(path.delimiter) };
+  assert.equal(resolveCommand('ptt-cli', env), path.join(onPath, 'ptt-cli'), 'PATH keeps precedence');
+  assert.equal(resolveCommand('ptt-local-cli', env), path.join(localBin, 'ptt-local-cli'));
+  assert.equal(resolveCommand('ptt-not-executable', env), 'ptt-not-executable');
+  assert.equal(resolveCommand('ptt-missing-cli', env), 'ptt-missing-cli', 'unresolved names still surface as CLI not found');
+  assert.equal(resolveCommand('/custom/bin/claude', env), '/custom/bin/claude');
+});
+
+test('a VS Code host on the bare launchd PATH still finds Claude in ~/.local/bin', { skip: process.platform === 'win32' }, async (t) => {
+  const f = fixtures(t, { claude: { stdout: claude } });
+  const localBin = path.join(f.dir, '.local', 'bin');
+  fs.mkdirSync(localBin, { recursive: true });
+  fs.renameSync(f.commands.claude, path.join(localBin, 'claude'));
+  const original = { homedir: os.homedir, PATH: process.env.PATH };
+  os.homedir = () => f.dir;
+  process.env.PATH = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(path.delimiter);
+  let result;
+  try {
+    result = await generateWithFallback('synthetic', { commands: { ...f.commands, claude: 'claude' } });
+  } finally {
+    os.homedir = original.homedir;
+    process.env.PATH = original.PATH;
+  }
+  assert.deepEqual(result, { ...value, provider: 'claude' });
+  assert.deepEqual(f.trace().map(x => x.provider), ['claude']);
 });
