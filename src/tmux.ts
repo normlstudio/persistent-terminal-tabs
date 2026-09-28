@@ -1,3 +1,4 @@
+import { cachedCodexThread, matchCodexScreen } from './codex-history';
 import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -293,7 +294,7 @@ function codexSessionFile(id: string): string | undefined {
 
 /** Best-effort: does a Codex session transcript for this id already exist under ~/.codex/sessions? */
 export function hasCodexSession(id: string): boolean {
-  return !!codexSessionFile(id);
+  return !!cachedCodexThread(id) || !!codexSessionFile(id);
 }
 
 function grokSessionDir(id: string): string | undefined {
@@ -415,7 +416,7 @@ export function listSessions(): TmuxSessionInfo[] {
     out.push({
       id: name.slice(3),
       name,
-      attached: attached === '1',
+      attached: Number(attached) > 0,
       command: command || '',
       ramMB: pid ? Math.round(subtreeKB(pid) / 1024) : 0,
       activitySec: parseInt(activity, 10) || 0,
@@ -444,6 +445,18 @@ export function capturePane(id: string): string | undefined {
   } catch {
     return undefined; // session gone, or tmux busy — treat as "no change"
   }
+}
+
+/** Codex's OSC terminal title stays complete even when its visible footer is truncated. */
+export function liveCodexThreadId(id: string): string | undefined {
+  const tmux = tmuxPath();
+  if (!tmux) return undefined;
+  try {
+    const raw = cp.execFileSync(tmux, [...socketArgs(), 'display-message', '-p', '-t', sessionName(id), '#{pane_current_command}\n#{pane_title}'], { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] });
+    const [command, title] = raw.trim().split('\n');
+    if (!/\bcodex\b/i.test(command)) return undefined;
+    return matchCodexScreen(capturePane(id) ?? '', undefined, title)?.id;
+  } catch { return undefined; }
 }
 
 /**

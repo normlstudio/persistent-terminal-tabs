@@ -1,3 +1,4 @@
+import { cachedCodexThread, codexConversation } from './codex-history';
 import { generateWithFallback, ProviderOptions, RecapProvider } from './recap-providers';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -100,7 +101,7 @@ function codexTranscriptFile(id: string, cwd?: string, knownSessionId?: string):
       }
     }
   } catch { return undefined; }
-  if (!cwd) return undefined;
+  if (knownSessionId || !cwd) return undefined;
   found.sort((a, b) => b.m - a.m);
   for (const { f } of found.slice(0, 200)) if (codexRolloutCwd(f) === cwd) return f;
   return undefined;
@@ -216,10 +217,7 @@ export function transcriptFile(id: string, opts: RecapOptions = {}): string | un
     const f = grok();
     if (f) return f;
   }
-  if (opts.preferCodex) {
-    const f = codex();
-    if (f) return f;
-  }
+  if (opts.preferCodex) return codex();
   let dirs: string[];
   try { dirs = fs.readdirSync(PROJECTS_DIR); } catch { dirs = []; }
   for (const d of dirs) {
@@ -239,6 +237,8 @@ export function transcriptFile(id: string, opts: RecapOptions = {}): string | un
 
 /** mtime of a chat's transcript (0 if none) — lets callers skip re-recapping a chat that hasn't changed. */
 export function transcriptMtime(id: string, opts: RecapOptions = {}): number {
+  const thread = cachedCodexThread(opts.codexSessionId || id);
+  if (opts.preferCodex && thread) return thread.updatedAt * 1000;
   const f = transcriptFile(id, opts);
   if (!f) return 0;
   try { return fs.statSync(f).mtimeMs; } catch { return 0; }
@@ -390,6 +390,23 @@ function summaryFallback(file: string | undefined): Recap | null {
 
 /** Read the original conversation once, then try Claude → Codex → Grok without rebinding its source. */
 export async function generateRecap(id: string, opts: RecapOptions = {}): Promise<Recap | null> {
+  if (opts.preferCodex || opts.codexSessionId) {
+    try {
+      const { thread, messages } = await codexConversation(opts.codexSessionId || id);
+      const turns: string[] = [];
+      for (const m of messages) takeTurn(JSON.stringify({ type: m.role, message: { content: m.text } }), turns);
+      const picked = turns.length <= 16 ? turns : [turns[0], '…', ...turns.slice(-14)];
+      const convo = picked.join('\n').slice(0, 7000);
+      if (convo) {
+        const result = await generateWithFallback(`${PROMPT}\n\nCONVERSATION:\n${convo}`, opts);
+        return result ? { ...result, source: 'codex', codexSessionId: thread.id } : null;
+      }
+      opts.onDiagnostic?.('Codex conversation has no message text yet');
+      return null;
+    } catch {
+      opts.onDiagnostic?.('Codex history API unavailable; checking legacy transcript');
+    }
+  }
   const file = transcriptFile(id, opts);
   if (!file) { opts.onDiagnostic?.('No transcript found for this chat'); return null; }
   const convo = condense(file);

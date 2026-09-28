@@ -1,3 +1,4 @@
+import { configureCodexHistory, refreshCodexThreads } from './codex-history';
 import * as vscode from 'vscode';
 import { randomUUID } from 'crypto';
 import * as fs from 'fs';
@@ -5,7 +6,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { StateStore, StateData, NEW_GROUP, SessionMeta, AgentKind, workspaceSlug, rememberCodexLink, rememberGrokLink, rememberAgyLink, agentDisplayName } from './state';
 import { TabsTree, Node, Arrange } from './tree';
-import { tmuxAvailable, tmuxLaunch, killSession, hasTranscript, hasCodexSession, hasGrokSession, hasAgySession, AgentSpec, applyTmuxConf, listSessions, TmuxSessionInfo, tmuxDiag, liveCodexTranscript, liveGrokTranscript, liveAgyTranscript, capturePane } from './tmux';
+import { tmuxAvailable, tmuxLaunch, killSession, hasTranscript, hasCodexSession, hasGrokSession, hasAgySession, AgentSpec, applyTmuxConf, listSessions, TmuxSessionInfo, tmuxDiag, liveCodexThreadId, liveCodexTranscript, liveGrokTranscript, liveAgyTranscript, capturePane } from './tmux';
 import { friendlyProject, discoverSessions, transcriptCwd, transcriptCwds } from './sessions';
 import { recordHistory, readHistory, historyPath, HistoryEvent } from './history';
 import { generateRecap, Recap, RecapOptions, RecapSource, transcriptMtime, grokSessionIdFromFile, agySessionIdFromFile } from './recaps';
@@ -57,7 +58,7 @@ function diagDots(when: string): void {
   let open = 0, detached = 0, suspended = 0, working = 0;
   const ex: string[] = [];
   for (const id of store.allIds()) {
-    const o = isOpen(id);
+    const o = isOpen(id) || attachedIds.has(id.slice(0, 8));
     const d = !o && sessionAliveCached(id);
     const w = (o || d) && isWorkingCached(id);
     if (w) working++;
@@ -147,6 +148,7 @@ function pruneDeadTerminals(): void {
 /** 8-char ids of every LIVE tmux session (cached from one listSessions pass). Powers the 🟡 detached dot: a saved
  *  tab whose session is alive but isn't open here. Refreshed after actions + on a timer. */
 let aliveIds = new Set<string>();
+let attachedIds = new Set<string>();
 
 /**
  * 🔵 WORKING-DOT state. tmux's own #{session_activity} clock is NOT usable here — measured, it sat 100+ s stale
@@ -223,7 +225,14 @@ function isWorkingCached(id: string): boolean {
  *  set — which also moves on its own as blue lingers expire) so the timer only re-renders when it matters. */
 function refreshAlive(): boolean {
   let next: Set<string>;
-  try { next = new Set(listSessions().map((s) => s.id)); } catch { return false; }
+  let attached: Set<string>;
+  try {
+    const sessions = listSessions();
+    next = new Set(sessions.map(s => s.id));
+    attached = new Set(sessions.filter(s => s.attached).map(s => s.id));
+  } catch { return false; }
+  const attachedChanged = attached.size !== attachedIds.size || [...attached].some(id => !attachedIds.has(id));
+  attachedIds = attached;
   const aliveChanged = next.size !== aliveIds.size || [...next].some((x) => !aliveIds.has(x));
   aliveIds = next;
 
@@ -234,7 +243,7 @@ function refreshAlive(): boolean {
   workingSet = nextWorking;
 
   updateStatus(); // keep the status-bar counter honest on every poll
-  return aliveChanged || workingChanged;
+  return aliveChanged || workingChanged || attachedChanged;
 }
 
 /** User just interacted with the panel (clicked a tab/group, hit Refresh) — recompute the dots NOW instead of
@@ -271,8 +280,10 @@ function bindLiveCodexSessions(): boolean {
     const id = store.allIds().find((saved) => saved.startsWith(session.id));
     if (!id) continue;
     const meta = store.meta(id);
-    if (!meta || meta.codexSessionId) continue;
-    const codexSessionId = codexIdFromTranscript(liveCodexTranscript(session.id));
+    if (!meta) continue;
+    const observed = liveCodexThreadId(session.id);
+    const codexSessionId = observed ?? (!meta.codexSessionId ? codexIdFromTranscript(liveCodexTranscript(session.id)) : undefined);
+    if (codexSessionId === meta.codexSessionId) continue;
     if (!codexSessionId) continue;
     meta.codexSessionId = codexSessionId;
     meta.recapAgent = 'codex';
@@ -824,6 +835,8 @@ function recapBindId(r: Recap): string | undefined {
 }
 
 function recapOptions(id: string, m?: SessionMeta): RecapOptions {
+  const modern = liveCodexThreadId(id);
+  if (modern) return { preferCodex: true, codexSessionId: modern, cwd: m?.cwd };
   const liveAgy = liveAgyTranscript(id);
   if (liveAgy) {
     return { cwd: m?.cwd, preferAgy: true, agySessionId: agySessionIdFromFile(liveAgy) };
@@ -890,11 +903,12 @@ async function regenerateChat(node?: Node): Promise<void> {
   await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `✨ Recapping “${meta.title}”…` },
     async () => {
+      await refreshCodexThreads(true).catch(() => undefined);
       const opts = recapOptions(node.id, meta);
       const failures: string[] = [];
       const r = await generateRecap(node.id, recapGenerationOptions(opts, (message) => failures.push(message)));
       if (!r) {
-        vscode.window.showWarningMessage(`Could not generate name + recap. ${failures.join('; ')}. Sign in to an available CLI and try again.`);
+        vscode.window.showWarningMessage(`Could not generate name + recap. ${failures.join('; ')}. See the Persistent Terminal Tabs output for details.`);
         return;
       }
       if (r.recap) meta.recap = r.recap;
@@ -1413,7 +1427,7 @@ function showState(): void {
   log(`──── ${store.allIds().length} saved · ${liveTerminals.size} live ────`);
 }
 
-export function activate(context: vscode.ExtensionContext): void {
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
   // `norml.persistent-terminal-tabs` was an internal/archive build that used the same view + command ids as the
   // public extension. If both are installed, the second activation throws after partially registering its tree
   // and listeners: one copy owns the terminals while the other paints every row 🟡. Stay completely passive and
@@ -1436,6 +1450,8 @@ export function activate(context: vscode.ExtensionContext): void {
   store = StateStore.forWorkspace(wsKey);
   shuttingDown = false;
   useTmux = cfg('useTmux', true) && tmuxAvailable();
+  configureCodexHistory(cfg('codexCommand', 'codex'));
+  await refreshCodexThreads().catch(() => log('Codex history API unavailable; legacy transcript lookup remains enabled'));
   out.show(true);
   log(`▶ activated — ${store.allIds().length} saved tab(s) · tmux ${useTmux ? 'ON (lossless)' : 'off (plain shells)'}`);
   log(`  workspace: ${wsKey}`);
@@ -1477,7 +1493,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // Grace window: dispose untracked revivals (a default `zsh`) that surface right after startup.
   // Armed only in a managed window, so an unmanaged window never disposes a freshly-opened terminal.
   graceUntil = managed ? Date.now() + STARTUP_GRACE_MS : 0;
-  tree = new TabsTree(store, isOpen, (a: Arrange) => {
+  tree = new TabsTree(store, (id) => isOpen(id) || attachedIds.has(id.slice(0, 8)), (a: Arrange) => {
     store.save();
     pruneDeadTerminals(); // clear stale anchors before reconciling, so splits don't fall back to new tabs
     reconcileAutoNames(); // may rename auto groups; applyTabMove re-reads the target group AFTER this
@@ -1620,9 +1636,15 @@ export function activate(context: vscode.ExtensionContext): void {
     // — the 🔵 working dot — an agent starting or finishing a turn): re-poll on the `workingPollSeconds` cadence
     // (default 8s; was a hardcoded 15s) and re-render only when a dot would actually change. refreshAlive() now
     // also reports a change when only the working set moved.
-    const dotTimer = setInterval(() => {
-      const bound = bindLiveForeignSessions();
-      if (refreshAlive() || bound) tree?.refresh();
+    let dotPolling = false;
+    const dotTimer = setInterval(async () => {
+      if (refreshAlive()) tree?.refresh();
+      if (dotPolling) return;
+      dotPolling = true;
+      try {
+        await refreshCodexThreads().catch(() => undefined);
+        if (!shuttingDown && bindLiveForeignSessions()) tree?.refresh();
+      } finally { dotPolling = false; }
     }, Math.min(60, Math.max(3, cfg('workingPollSeconds', 8))) * 1000);
     context.subscriptions.push({ dispose: () => clearInterval(dotTimer) });
     // STARTUP CATCH-UP. The activate-time tmux query can come back EMPTY (the server isn't reachable from the

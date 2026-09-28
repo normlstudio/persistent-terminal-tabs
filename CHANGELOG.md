@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.2
+
+- Read modern Codex paginated conversations through its local read-only app-server API, restoring name and recap generation when no JSONL transcript exists. Match full terminal titles (including narrow panes) only when unique; retain exact session links for resume.
+- Refresh links when a live pane switches Codex conversations. Never substitute a different same-folder transcript for a missing known conversation.
+- Refresh green attachment dots from tmux attachment counts, including multiple clients and attachments outside the current extension host. Keep blue status polling independent of asynchronous Codex metadata reads.
+- Missing history errors no longer incorrectly tell the user to sign in.
+
 ## 1.2.1
 
 - Fixed names and recaps silently failing with "CLI not found" when VS Code could not resolve the shell environment at startup ("Unable to resolve your shell environment in a reasonable time"). The extension host then runs on the bare launchd PATH, so bare `claude` / `codex` / `grok` were not found even though the chats themselves kept working. Recap CLIs are now looked up on PATH first, then in their usual install dirs (`~/.local/bin`, `~/.grok/bin`, `~/.bun/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, …), the same way tmux is found. Absolute paths in the command settings pass through unchanged.
