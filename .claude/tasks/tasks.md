@@ -2,6 +2,23 @@
 
 > Format: `- [ ] [P0|P1|P2|P3] [TASK-NNN] Action — why / relevant path (GOAL-NN)`.
 
+## Current mechanism — 1.2.3
+
+Blue follows the foreground Codex process's native OSC busy-title indicator.
+Terminal animation, typing, old transcript text and generic output changes are
+not work signals. Blue clears on the next poll (default 8 seconds), without a
+hold. Green means attached, yellow detached, and grey suspended. Other agents
+retain attachment colors until a reliable work signal is implemented.
+
+Name/recap lookup reads modern Codex paginated history through read-only local
+app-server methods. Exact unique conversation names match full terminal titles,
+including busy and approval decorations; known thread IDs remain persistent.
+
+## Historical mechanism — superseded by 1.2.3
+
+The former screen-change/busy-text heuristic below produced false positives and
+is retained only as implementation history. It is not the current specification.
+
 ## Mechanism (decided — REVISED after live testing)
 
 **First attempt (tmux `#{session_activity}`) was wrong** and is abandoned.
@@ -47,8 +64,7 @@ detached → 🟡 · else ⚪ outline.
 
 ## Now
 
-- [ ] [P1] [TASK-009] Max: reload the VS Code window once more to pick up
-      TASK-012 (on-click refresh), then confirm 🔵 behaviour (see Verification).
+No open work for the name/recap and false-blue repair. See the closeout below.
 
 ## Done — this round
 
@@ -60,17 +76,16 @@ detached → 🟡 · else ⚪ outline.
       `workingHoldSeconds` — a tab that finished < 20s ago stays 🔵 by design;
       lower `workingHoldSeconds` if that tail bothers Max.
 
-## Someday
+## Someday — optional, outside the completed repair
 
 - [ ] [P3] [TASK-007] Precision upgrade — optional Claude `Stop` /
       `UserPromptSubmit` hook writing `~/.terminal-tabs/activity/<id>` so the
-      blue state is exact for Claude (pane-marker stays the fallback and the
-      only signal for Codex/Grok/agy) — needs a `~/.claude/settings.json` opt-in
+      blue state is exact for Claude (no screen-based fallback; Codex already uses its native work indicator) — needs a `~/.claude/settings.json` opt-in
 - [ ] [P3] [TASK-008] Distinguish 🔵 working from a "⏸ needs you" state
       (permission prompt / plan approval) — currently a blocked prompt falls
       back to 🟢/🟡 once the prompt paints and the marker clears
-- [ ] [P3] [TASK-010] Add `agy` (Antigravity) busy marker to `BUSY_MARKER` once
-      its "working" line text is known — until then agy tabs rely on signal 2
+- [ ] [P3] [TASK-010] Verify a native Antigravity work-state signal before
+      enabling blue for agy. Screen changes and busy-text guesses are retired.
 
 ## Blocked
 
@@ -106,7 +121,7 @@ detached → 🟡 · else ⚪ outline.
       tmux socket: instant detection, 7/24 sessions flagged working, stable
       across 5 polls, this Claude session correctly among them.
 
-### Verification (goal-backward, GOAL-01)
+### Historical verification — superseded by the 1.2.3 closeout
 
 **Done:** compiles, tests 8/8, dot precedence + predicates read correctly,
 `showWorkingDot:false` ⇒ `workingIds()` empty. Mechanism live-tested against the
@@ -114,7 +129,7 @@ real socket (TASK-011): the `BUSY_MARKER` + pane-diff logic, exactly as compiled
 into `out/`, cleanly separated working from idle sessions and updated on the
 first poll.
 
-**Pending — needs Max after a window reload:**
+**Historical checklist (not pending for 1.2.3):**
 1. **Reload Window** (Cmd+Shift+P → Developer: Reload Window). Full Cmd+Q +
    reopen if the dots don't change behaviour.
 2. A tab with an agent mid-reply shows 🔵 within ≤ `workingPollSeconds` (8s);
@@ -127,3 +142,26 @@ first poll.
 ---
 *Never silently delete open work. Check it off, defer it with a reason, archive
 it, or promote it to a linked project-lane plan.*
+
+## Closeout — September 29, 2026
+
+Source: [Max's closeout request](captures/2026-09-29-ptt-closeout.md).
+
+- [x] [P1] [TASK-009] Updated extension loaded after reload; activation logged
+  September 30 at 01:20 UTC (September 29 in New York). Max confirmed it seems working.
+- [x] [P1] [TASK-013] Replace false-blue screen heuristics with native Codex
+  work-state titles and remove the hold. Installed 1.2.3 matches the compiled
+  JavaScript byte for byte; 16 tests pass. Commit `5d18cd6` is on origin/main.
+- [x] [P1] [TASK-014] Restore modern Codex name/recap lookup, including busy
+  and approval title decoration. Exact affected conversation read successfully;
+  a real generation produced “Iryna — Shuttle Setup”. Conversation binding is
+  saved. Live extension has also successfully saved other regenerated recaps.
+  The affected tab still has its default “chat 12” title and no stored recap;
+  its on-demand ✨ action can populate those. UI automation could not reliably
+  target that action while the window was being used, so no live-state JSON
+  was edited behind the running extension. This is a remaining optional
+  per-tab generation, not an unresolved history lookup or release defect.
+
+All 45 tmux sessions present before the install survived. No temporary worktree
+was created. Optional TASK-007/008/010 remain deferred; they are not blockers
+for closing this repair chat. The screen heuristic must not be reintroduced.
