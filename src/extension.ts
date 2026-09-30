@@ -1,3 +1,4 @@
+import { isAgentWorking } from './working-status';
 import { configureCodexHistory, refreshCodexThreads } from './codex-history';
 import * as vscode from 'vscode';
 import { randomUUID } from 'crypto';
@@ -6,7 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { StateStore, StateData, NEW_GROUP, SessionMeta, AgentKind, workspaceSlug, rememberCodexLink, rememberGrokLink, rememberAgyLink, agentDisplayName } from './state';
 import { TabsTree, Node, Arrange } from './tree';
-import { tmuxAvailable, tmuxLaunch, killSession, hasTranscript, hasCodexSession, hasGrokSession, hasAgySession, AgentSpec, applyTmuxConf, listSessions, TmuxSessionInfo, tmuxDiag, liveCodexThreadId, liveCodexTranscript, liveGrokTranscript, liveAgyTranscript, capturePane } from './tmux';
+import { tmuxAvailable, tmuxLaunch, killSession, hasTranscript, hasCodexSession, hasGrokSession, hasAgySession, AgentSpec, applyTmuxConf, listSessions, TmuxSessionInfo, tmuxDiag, liveCodexThreadId, liveCodexTranscript, liveGrokTranscript, liveAgyTranscript } from './tmux';
 import { friendlyProject, discoverSessions, transcriptCwd, transcriptCwds } from './sessions';
 import { recordHistory, readHistory, historyPath, HistoryEvent } from './history';
 import { generateRecap, Recap, RecapOptions, RecapSource, transcriptMtime, grokSessionIdFromFile, agySessionIdFromFile } from './recaps';
@@ -150,70 +151,14 @@ function pruneDeadTerminals(): void {
 let aliveIds = new Set<string>();
 let attachedIds = new Set<string>();
 
-/**
- * 🔵 WORKING-DOT state. tmux's own #{session_activity} clock is NOT usable here — measured, it sat 100+ s stale
- * while a Claude/Codex TUI was visibly working, because those TUIs batch their redraws. Two signals off the
- * VISIBLE PANE instead, per poll:
- *   1. a "busy marker" on screen — the `esc to interrupt` line every agent (Claude / Codex / Grok) shows while
- *      a turn runs, or its truncated `(2m 46s ·` elapsed-timer head. Instant, no baseline needed.
- *   2. the pane text (whitespace-normalised, non-blank) changed since last poll — catches a narrow pane that
- *      truncated the marker away, or a plain build streaming in a shell.
- * Either fires -> stamp `lastBusyMs`; the dot then stays blue for `workingHoldSeconds` to bridge quiet gaps
- * (a long silent tool call, a between-turns pause) so it doesn't flap.
- */
-const paneHash = new Map<string, string>();   // 8-char id -> last normalised pane hash (for signal 2)
-const lastBusyMs = new Map<string, number>(); // 8-char id -> epoch-ms we last saw this session busy
-let workingSet = new Set<string>();            // snapshot the tree renders from (cheap, like sessionAliveCached)
+/** Blue is a current agent-reported state, never inferred from changing terminal pixels. */
+let workingSet = new Set<string>();
 
-const BUSY_MARKER = /esc to interrupt|\besc to interr|\(\d+m ?\d*s? ?[·•]|\bworking\b.{0,20}\binterrupt/i;
-
-/** 🔵 knobs, re-read live so a Settings change needs no reload. `showWorkingDot:false` => nothing is ever blue. */
-function workingCfg(): { on: boolean; pollMs: number; holdMs: number } {
+function workingCfg(): { on: boolean; pollMs: number } {
   return {
     on: cfg('showWorkingDot', true),
     pollMs: Math.min(60, Math.max(3, cfg('workingPollSeconds', 8))) * 1000,
-    holdMs: Math.min(300, Math.max(5, cfg('workingHoldSeconds', 20))) * 1000,
   };
-}
-
-/** Tiny, fast string hash (djb2) — we only need "did this text change", not cryptographic strength. */
-function quickHash(s: string): string {
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
-  return String(h >>> 0);
-}
-
-/** For each live session, look at its visible pane and stamp `lastBusyMs` if it reads as busy (see the block
- *  comment above). One cheap `capture-pane` per live session — bounded by tmux session count, not saved tabs.
- *  Skipped entirely when the feature is off. */
-function refreshWorking(live: Set<string>): void {
-  const { on } = workingCfg();
-  for (const id of [...paneHash.keys()]) if (!live.has(id)) { paneHash.delete(id); lastBusyMs.delete(id); }
-  if (!on) return;
-  const now = Date.now();
-  for (const id of live) {
-    const screen = capturePane(id);
-    if (screen === undefined) continue; // session vanished mid-poll — leave its last state to expire via holdMs
-    const norm = screen.replace(/[ \t]+$/gm, '').replace(/\n{2,}/g, '\n').trim();
-    const h = norm ? quickHash(norm) : '';
-    const prev = paneHash.get(id);
-    paneHash.set(id, h);
-    const changed = prev !== undefined && norm !== '' && prev !== h; // a fresh baseline is not "working" yet
-    if (BUSY_MARKER.test(screen) || changed) lastBusyMs.set(id, now);
-  }
-}
-
-/** 8-char ids that should RENDER BLUE right now: a live session last seen busy within the last workingHoldSeconds. */
-function workingIds(): Set<string> {
-  const { on, holdMs } = workingCfg();
-  const out = new Set<string>();
-  if (!on) return out;
-  const now = Date.now();
-  for (const id of aliveIds) {
-    const at = lastBusyMs.get(id);
-    if (at !== undefined && now - at < holdMs) out.add(id);
-  }
-  return out;
 }
 
 /** Is this chat's session actively working (🔵)? Reads the cache, keyed by 8-char id (mirrors sessionAliveCached). */
@@ -222,12 +167,13 @@ function isWorkingCached(id: string): boolean {
 }
 
 /** Re-read the live tmux set AND the 🔵 working set; returns whether a DOT would change (alive set, or working
- *  set — which also moves on its own as blue lingers expire) so the timer only re-renders when it matters. */
+ *  set) so the timer only re-renders when it matters. */
 function refreshAlive(): boolean {
   let next: Set<string>;
   let attached: Set<string>;
+  let sessions: TmuxSessionInfo[];
   try {
-    const sessions = listSessions();
+    sessions = listSessions();
     next = new Set(sessions.map(s => s.id));
     attached = new Set(sessions.filter(s => s.attached).map(s => s.id));
   } catch { return false; }
@@ -236,8 +182,8 @@ function refreshAlive(): boolean {
   const aliveChanged = next.size !== aliveIds.size || [...next].some((x) => !aliveIds.has(x));
   aliveIds = next;
 
-  refreshWorking(next);
-  const nextWorking = workingIds();
+  const nextWorking = new Set(workingCfg().on
+    ? sessions.filter(s => isAgentWorking(s.command, s.title)).map(s => s.id) : []);
   const workingChanged =
     nextWorking.size !== workingSet.size || [...nextWorking].some((x) => !workingSet.has(x));
   workingSet = nextWorking;

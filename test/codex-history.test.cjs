@@ -10,6 +10,9 @@ test('full footer or terminal title identifies one chat; duplicates and truncati
   assert.equal(h.matchCodexScreen('GPT-6-Astra high · ~ · PTT status repair', [thread]), thread);
   assert.equal(h.matchCodexScreen('GPT-6-Astra high · ~ · PTT…', [thread]), undefined);
   assert.equal(h.matchCodexScreen('', [thread], 'PTT status repair | host'), thread);
+  assert.equal(h.matchCodexScreen('GPT-6-Astra high · ~ · PTT…', [thread], '⠋ PTT status repair | host'), thread);
+  assert.equal(h.matchCodexScreen('', [thread], '[ ! ] Action Required | PTT status repair | host'), thread);
+  assert.equal(h.matchCodexScreen('', [thread, {...thread, id:'other'}], '⠋ PTT status repair | host'), undefined);
   assert.equal(h.matchCodexScreen('', [thread, {...thread, id:'other'}], 'PTT status repair | host'), undefined);
   assert.equal(h.matchCodexScreen('PTT status repair', [thread]), undefined);
 });

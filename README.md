@@ -17,12 +17,12 @@ Status dots:
 
 | Dot | Meaning |
 |-----|---------|
-| 🔵 | Working right now — the agent is streaming, thinking, or running a tool |
-| 🟢 | Open in this window, idle |
+| 🔵 | Codex reports an active turn — streaming, thinking, or running a tool |
+| 🟢 | Open — terminal attached |
 | 🟡 | Running in the background — click to reattach |
 | ⚪ | Suspended — click to resume from transcript |
 
-🔵 also lights up for background (🟡) chats that are still working, and covers Claude, Codex, Grok, and Antigravity. Turn it off with `terminalTabs.showWorkingDot`; tune responsiveness with `terminalTabs.workingPollSeconds` / `workingHoldSeconds`.
+🔵 follows the foreground Codex process’s live terminal-title indicator, including detached chats. Idle animations, typing, old output, and pending approval do not trigger blue. Other agents keep their attachment colors; their work state is not inferred. Turn blue off with `terminalTabs.showWorkingDot`; tune polling with `terminalTabs.workingPollSeconds` (default 8 seconds). Blue clears on the next poll with no extra hold.
 
 ## Requirements
 

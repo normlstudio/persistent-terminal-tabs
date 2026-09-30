@@ -1,3 +1,4 @@
+import { codexConversationTitle } from './working-status';
 import * as cp from 'child_process';
 import { resolveCommand } from './recap-providers';
 
@@ -90,6 +91,7 @@ export function refreshCodexThreads(force = false): Promise<void> {
 
 /** Only a complete unique TUI footer or OSC terminal title qualifies. Truncation/duplicate names stay unbound. */
 export function matchCodexScreen(screen: string, candidates: Iterable<CodexThread> = threads.values(), paneTitle = ''): CodexThread | undefined {
+  paneTitle = codexConversationTitle(paneTitle);
   const footer = screen.split('\n').slice(-8).map(x => x.trim()).filter(x => /(?:GPT-|gpt-|o[134][ -]).* · /.test(x));
   const matches = [...candidates].filter(t => t.name && (footer.some(line => line.endsWith(` · ${t.name}`)) || paneTitle === t.name || paneTitle.startsWith(`${t.name} | `)));
   return matches.length === 1 ? matches[0] : undefined;

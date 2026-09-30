@@ -358,6 +358,7 @@ export interface TmuxSessionInfo {
   name: string;     // full 'tt-xxxxxxxx'
   attached: boolean;
   command: string;  // foreground command in the active pane
+  title: string;    // agent-authored OSC title; read alongside the foreground command
   ramMB: number;    // ~RSS of the pane pid's process subtree (0 if unknown)
   activitySec: number; // epoch seconds of the session's last activity (0 if unknown) — drives idle auto-suspend
 }
@@ -375,7 +376,7 @@ export function listSessions(): TmuxSessionInfo[] {
   // underscore-joined blob, split() never split, and every id became "1df558b7_0_3355_zsh_…" (the all-grey-dots
   // bug: has(id) false for every saved tab). A printable separator survives any locale; the UTF-8 env is belt
   // and suspenders so #{pane_current_command} etc. are never sanitized either.
-  const FMT = '#{session_name}|#{session_attached}|#{pane_pid}|#{pane_current_command}|#{session_activity}';
+  const FMT = '#{session_name}|#{session_attached}|#{pane_pid}|#{pane_current_command}|#{session_activity}|#{pane_title}';
   const ENV = { ...process.env, LANG: process.env.LANG || 'en_US.UTF-8' };
   const probe = (sock: string[]): string | null => {
     try { return cp.execFileSync(tmux, [...sock, 'list-sessions', '-F', FMT], { encoding: 'utf8', env: ENV }); }
@@ -412,12 +413,13 @@ export function listSessions(): TmuxSessionInfo[] {
   const out: TmuxSessionInfo[] = [];
   for (const line of raw.split('\n')) {
     if (!line.startsWith('tt-')) continue;
-    const [name, attached, pid, command, activity] = line.split('|');
+    const [name, attached, pid, command, activity, ...title] = line.split('|');
     out.push({
       id: name.slice(3),
       name,
       attached: Number(attached) > 0,
       command: command || '',
+      title: title.join('|'),
       ramMB: pid ? Math.round(subtreeKB(pid) / 1024) : 0,
       activitySec: parseInt(activity, 10) || 0,
     });
@@ -425,13 +427,7 @@ export function listSessions(): TmuxSessionInfo[] {
   return out;
 }
 
-/**
- * The text currently VISIBLE in a session's active pane. Powers the 🔵 working dot: modern agent TUIs (Claude
- * Code, Codex, Grok) batch their redraws, so tmux's own #{session_activity} clock can sit minutes stale while
- * one is visibly working — but the on-screen "· Ns · esc to interrupt" line is right there, and its timer
- * ticks every ~1-2s. So the caller looks for that busy marker AND diffs the capture between polls. Works on a
- * DETACHED session too (tmux keeps the pane buffer server-side). One cheap tmux call; best-effort, never throws.
- */
+/** Visible pane text for conversation identity fallback; never used to infer work. */
 export function capturePane(id: string): string | undefined {
   const tmux = tmuxPath();
   if (!tmux) return undefined;

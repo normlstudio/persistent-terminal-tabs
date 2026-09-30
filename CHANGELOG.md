@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.3
+
+- Stop false blue dots from idle Codex animations, typing, and old output containing busy phrases. Read Codex’s live busy-title indicator together with its foreground process; clear blue on the next poll without a hold. Unsupported agents retain attachment colors instead of guessed activity.
+- Match Codex conversation names through busy and approval title decorations, including narrow panes, so those states do not prevent name/recap lookup.
+
 ## 1.2.2
 
 - Read modern Codex paginated conversations through its local read-only app-server API, restoring name and recap generation when no JSONL transcript exists. Match full terminal titles (including narrow panes) only when unique; retain exact session links for resume.
