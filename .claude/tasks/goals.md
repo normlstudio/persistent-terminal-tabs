@@ -2,6 +2,10 @@
 
 > Long-term outcomes for this repo. Short-term work lives in `tasks.md`.
 
+## Current focus — group projects
+
+- [x] [GOAL-02] Select a named project once per group; all new chats open in its folder without manual cd. Source: [Max's October 9 request](captures/2026-10-09-group-project-picker.md). Success: searchable recent/workspace folders, explicit empty-group persistence and inherited launch cwd. Supporting task: [TASK-015](items/task-015-add-group-project-picker.md). Status: achieved through implementation and automated acceptance; 1.3.0 installed, live UI confirmation pending Max's window reload.
+
 - [ ] [GOAL-01] Each tab's dot tells the truth about that session at a glance —
       not just process state (attached / detached / suspended) but **liveness**:
       a distinct **🔵 working** state while the agent is actively producing

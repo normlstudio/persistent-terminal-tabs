@@ -107,6 +107,8 @@ export class TabsTree
       const item = new vscode.TreeItem(node.name, vscode.TreeItemCollapsibleState.None);
       item.id = `group:${node.name}`;
       item.description = String(count);
+      const cwd = this.store.groupCwd(node.name);
+      item.tooltip = cwd ? `${node.name}\nProject: ${g?.projectName || node.name}\n${cwd}\nNew chats start in this folder. Choose Project Folder to change it.` : `${node.name}\nChoose Project Folder to set the folder for new chats.`;
       item.contextValue = 'group';
       // resourceUri is only a hook for provideFileDecoration() to tint the active row green.
       item.resourceUri = vscode.Uri.parse(`${DECO_SCHEME}://group/${encodeURIComponent(node.name)}`);

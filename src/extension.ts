@@ -11,6 +11,8 @@ import { tmuxAvailable, tmuxLaunch, killSession, hasTranscript, hasCodexSession,
 import { friendlyProject, discoverSessions, transcriptCwd, transcriptCwds } from './sessions';
 import { recordHistory, readHistory, historyPath, HistoryEvent } from './history';
 import { generateRecap, Recap, RecapOptions, RecapSource, transcriptMtime, grokSessionIdFromFile, agySessionIdFromFile } from './recaps';
+import { ProjectStore, ProjectFolder, folderProject, isDirectory, normalizeFolder } from './projects';
+import { pickProject } from './project-picker';
 
 /*
  * SLICE + GROUPS. Proven so far: close→drop, reload→restore-the-set, mass-close≠drop, stray-dispose.
@@ -21,6 +23,7 @@ import { generateRecap, Recap, RecapOptions, RecapSource, transcriptMtime, grokS
  */
 
 let store: StateStore;
+const projects = new ProjectStore();
 let tree: TabsTree;
 let out: vscode.OutputChannel;
 let shuttingDown = false;
@@ -332,21 +335,35 @@ function anchorFor(group: string): vscode.Terminal | undefined {
   return last;
 }
 
-/** The folder a group "lives in": the most common cwd among its chats (newest wins ties). undefined if empty. */
-function groupCwd(group: string): string | undefined {
-  const g = store.groups.find((x) => x.name === group);
-  if (!g) return undefined;
-  const counts = new Map<string, number>();
-  let best: string | undefined;
-  let bestN = 0;
-  for (const id of g.sessionIds) {              // in order, so the newest chat wins an equal count
-    const cwd = store.meta(id)?.cwd;
-    if (!cwd) continue;
-    const n = (counts.get(cwd) ?? 0) + 1;
-    counts.set(cwd, n);
-    if (n >= bestN) { best = cwd; bestN = n; }
-  }
-  return best;
+function groupCwd(group: string): string | undefined { return store.groupCwd(group); }
+
+function chooseProject(current?: string): Promise<ProjectFolder | undefined> {
+  const roots = [
+    ...(vscode.workspace.workspaceFolders ?? []).filter((f) => f.uri.scheme === 'file').map((f) => f.uri.fsPath),
+    ...cfg<string[]>('projectSearchRoots', []).map(normalizeFolder),
+  ];
+  const seeds = [
+    ...store.groups.filter((g) => g.cwd).map((g) => ({ name: g.projectName || folderProject(g.cwd!).name, cwd: g.cwd! })),
+    ...roots.map(folderProject),
+    ...store.allIds().map((id) => folderProject(store.meta(id)?.cwd ?? '')).filter((p) => path.isAbsolute(p.cwd)),
+  ];
+  return pickProject(projects, seeds, roots, current);
+}
+
+/** Future-chat default only: never cd or rewrite a live/resumable conversation when changing a group project. */
+async function chooseGroupProject(node?: Node): Promise<void> {
+  const name = node?.kind === 'group' ? node.name : currentGroup();
+  const group = store.groups.find((g) => g.name === name);
+  if (!group) return;
+  const project = await chooseProject(groupCwd(name));
+  if (!project || !store.groups.includes(group)) return;
+  projects.remember(project);
+  group.cwd = project.cwd;
+  group.projectName = project.name;
+  group.auto = false;
+  store.save();
+  tree?.refresh();
+  log(`⌂ group "${group.name}" project → ${project.cwd}`);
 }
 
 /** Where a new chat lands: the panel's selected group/tab, else the active terminal's group.
@@ -394,7 +411,7 @@ function reconcileCwds(): void {
 /** Auto-name `auto` groups from the dominant folder of their chats (unique names only). */
 function reconcileAutoNames(): void {
   for (const g of store.groups) {
-    if (g.name === NEW_GROUP || g.auto !== true || g.sessionIds.length === 0) continue;
+    if (g.name === NEW_GROUP || g.cwd || g.auto !== true || g.sessionIds.length === 0) continue;
     const counts = new Map<string, number>();
     for (const id of g.sessionIds) {
       const f = friendlyProject(store.meta(id)?.cwd ?? '');
@@ -446,6 +463,7 @@ function openTerminal(id: string, meta: SessionMeta, restored: boolean): vscode.
   const opts: vscode.TerminalOptions = {
     name: label.length > 46 ? label.slice(0, 45) + '…' : label,
     isTransient: true,
+    cwd: realCwd,
   };
   const anchor = anchorFor(group);
   if (anchor) opts.location = { parentTerminal: anchor }; // panel: split into the group's tab
@@ -480,17 +498,26 @@ function openTerminal(id: string, meta: SessionMeta, restored: boolean): vscode.
   return term;
 }
 
-function newChat(agent: AgentKind = 'claude', targetGroup?: string): void {
+async function newChat(agent: AgentKind = 'claude', targetGroup?: string): Promise<void> {
   pruneDeadTerminals(); // so anchorFor below finds the group's LIVE pane (a stale one would open a new tab unsplit)
-  const id = randomUUID();
-  const title = `${agent === 'codex' ? 'codex' : agent === 'grok' ? 'grok' : agent === 'agy' ? 'agy' : 'chat'} ${++counter}`;
   // An explicit group-row "+" wins; otherwise the selected/open group is the target. With no PTT context,
   // currentGroup() falls back to 📥 New. This keeps the toolbar "+" beside the group Max is working in.
   const group = targetGroup ?? currentGroup();
-  // A real group carries its dominant folder into the new chat, whether targeted from its inline "+" or from the
-  // toolbar while that group is selected/open. The inbox is mixed, so it deliberately starts from HOME instead.
-  const inherited = group !== NEW_GROUP ? groupCwd(group) : undefined;
+  const target = store.groups.find((g) => g.name === group);
+  if (!target) return; // stale inline command must not create a phantom group
+  const inherited = groupCwd(group);
   const cwd = inherited ?? os.homedir();
+  if (target.cwd && !await isDirectory(cwd)) {
+    const action = await vscode.window.showWarningMessage(`Project folder is unavailable: ${cwd}`, 'Choose Project Folder');
+    if (action === 'Choose Project Folder') await chooseGroupProject({ kind: 'group', name: group });
+    return; // never silently start in HOME; press + after repairing the folder
+  }
+  if (!store.groups.includes(target)) return; // group was dropped while validating
+  if (target.name !== group) return; // group was renamed while validating; don't recreate its old name
+  // A project change during async validation should be handled by the next click, not a stale launch.
+  if (target.cwd && target.cwd !== cwd) return;
+  const id = randomUUID();
+  const title = `${agent === 'codex' ? 'codex' : agent === 'grok' ? 'grok' : agent === 'agy' ? 'agy' : 'chat'} ${++counter}`;
   const meta: SessionMeta = { title, project: 'slice', cwd, agent };
   store.add(id, meta, group);
   reconcileAutoNames();
@@ -511,9 +538,9 @@ function newChat(agent: AgentKind = 'claude', targetGroup?: string): void {
 }
 
 /** The "+" on a group row: spawn a chat straight into THAT group (skips select-then-drag). */
-function newChatInGroup(node?: Node): void {
+function newChatInGroup(node?: Node): Promise<void> {
   const target = node?.kind === 'group' ? node.name : undefined;
-  newChat(cfg<AgentKind>('defaultAgent', 'claude'), target);
+  return newChat(cfg<AgentKind>('defaultAgent', 'claude'), target);
 }
 
 async function addSession(): Promise<void> {
@@ -547,12 +574,20 @@ async function addSession(): Promise<void> {
   log(`+ added existing ${pick.sid.slice(0, 8)} · ${friendlyProject(pick.meta.cwd)} → ${finalGroup}`);
 }
 
-function newGroup(): void {
-  const name = store.nextGroupName();
-  store.addGroupAfterInbox(name, true); // land at the TOP (right after 📥 New), not at the bottom
+async function newGroup(): Promise<void> {
+  const project = await chooseProject();
+  if (!project) return;
+  projects.remember(project);
+  let name = project.name;
+  for (let n = 2; store.groups.some((g) => g.name === name); n++) name = `${project.name} (${n})`;
+  const group = store.addGroupAfterInbox(name, false);
+  group.cwd = project.cwd;
+  group.projectName = project.name;
   store.save();
   tree?.refresh();
-  log(`＋ group "${name}" after 📥 New (auto-names from its chats; right-click → Rename to fix a name)`);
+  tree?.setActiveGroup(name);
+  await view?.reveal({ kind: 'group', name }, { select: true, focus: true });
+  log(`＋ group "${name}" after 📥 New → ${project.cwd}`);
 }
 
 /**
@@ -1508,6 +1543,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('terminalTabs.newGrokChat', () => newChat('grok')),
     vscode.commands.registerCommand('terminalTabs.newAgyChat', () => newChat('agy')),
     vscode.commands.registerCommand('terminalTabs.newGroup', newGroup),
+    vscode.commands.registerCommand('terminalTabs.chooseGroupProject', chooseGroupProject),
     vscode.commands.registerCommand('terminalTabs.openAll', renderAll),
     vscode.commands.registerCommand('terminalTabs.openTab', openTab),
     vscode.commands.registerCommand('terminalTabs.openGroup', openGroup),

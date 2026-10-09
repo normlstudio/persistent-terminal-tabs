@@ -64,7 +64,9 @@ detached → 🟡 · else ⚪ outline.
 
 ## Now
 
-No open work for the name/recap and false-blue repair. See the closeout below.
+No active execution work. Group projects shipped as 1.3.0; see TASK-015 under Done. The running window needs Developer: Reload Window to load the installed version.
+
+This established legacy planning store has no v3 config or enabled GitHub issue mirror. Continue it in place; do not bulk-migrate historical records as part of this feature.
 
 ## Done — this round
 
@@ -90,6 +92,8 @@ No open work for the name/recap and false-blue repair. See the closeout below.
 ## Blocked
 
 ## Done
+
+- [x] [P1] [TASK-015] [Add named project folders to terminal groups](items/task-015-add-group-project-picker.md) — searchable folder picker, remembered names and explicit folder inheritance (GOAL-02). 27 tests passed; actual workspace `re` search finds Reels; installed 1.3.0 matches tested output. Live UI confirmation remains for Max after reload.
 
 - [x] [P1] [TASK-001] Working-set tracking — `paneHash` + `lastBusyMs` maps,
       `workingCfg()` / `refreshWorking()` / `workingIds()` / `isWorkingCached()`;

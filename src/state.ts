@@ -48,6 +48,10 @@ export function agentDisplayName(meta?: SessionMeta): string {
 
 export interface Group {
   name: string;
+  /** Explicit default folder for NEW chats. Existing sessions retain their own cwd for resume. */
+  cwd?: string;
+  /** Saved display name of the chosen project, independent of the group's editable title. */
+  projectName?: string;
   /** Optional VS Code ThemeColor id (e.g. "charts.blue") for the group icon. */
   color?: string;
   sessionIds: string[];
@@ -231,6 +235,25 @@ export class StateStore {
 
   groupOf(id: string): Group | undefined {
     return this.data.groups.find((g) => g.sessionIds.includes(id));
+  }
+
+  /** Explicit project wins, including for empty groups. Legacy groups keep dominant-cwd inference. */
+  groupCwd(name: string): string | undefined {
+    const g = this.data.groups.find((group) => group.name === name);
+    if (!g) return undefined;
+    if (g.cwd) return g.cwd;
+    if (name === NEW_GROUP) return undefined;
+    const counts = new Map<string, number>();
+    let best: string | undefined;
+    let bestN = 0;
+    for (const id of g.sessionIds) {
+      const cwd = this.meta(id)?.cwd;
+      if (!cwd) continue;
+      const n = (counts.get(cwd) ?? 0) + 1;
+      counts.set(cwd, n);
+      if (n >= bestN) { best = cwd; bestN = n; }
+    }
+    return best;
   }
 
   ensureGroup(name: string, color?: string, auto?: boolean): Group {

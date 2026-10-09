@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.0
+
+- Add Group now opens a searchable project-folder picker with named recent projects, full paths, workspace-folder discovery, folder browsing and editable saved names.
+- Groups save an explicit default folder, including when empty. Every New Chat command inherits it; a group's folder action changes the default for future chats while preserving existing conversation folders.
+- Plain terminals now receive the correct working directory. Missing group folders require a replacement rather than silently starting new chats at home.
+- Folder discovery runs asynchronously with separate limits per workspace root, prioritizes name matches and supports additional roots through `terminalTabs.projectSearchRoots`.
+
 ## 1.2.3
 
 - Stop false blue dots from idle Codex animations, typing, and old output containing busy phrases. Read Codex’s live busy-title indicator together with its foreground process; clear blue on the next poll without a hold. Unsupported agents retain attachment colors instead of guessed activity.
